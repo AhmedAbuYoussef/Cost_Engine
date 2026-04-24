@@ -5,6 +5,12 @@ FX Rate: **15.92 EGP/USD** | Default currency: **USD** | Date: 2026-04-17
 
 ---
 
+## Corrections
+
+- 2026-04-24 — EZDK Rebar Sc2 home scrap corrected from 7.33 (typo) to 14.48. Sc1 and Sc2 share identical inputs for this line item per formula (billets used × home-scrap % × byproduct price ÷ finished qty is independent of the billet sourcing scenario). Cascaded cells updated to stay self-consistent: Sc2 Total Conversion Cost 42.37 → 35.23, Sc2 Total Variable Mfg Cost 632.37 → 625.23, Difference (Sc1 − Sc2) 197.85 → 190.71.
+
+---
+
 ## 1. Stage 1 — DRI Cost
 
 ### 1.1 Inputs
@@ -148,11 +154,11 @@ Intercompany Price = Seller's Billet VC × Seller's Trade-off Ratio.
 |---|---|---|---|---|
 | Material Price | 590 | 590 | 590 | 590 |
 | Yield Effect | 33.42 | 17.68 | 12.55 | 19.36 |
-| Home Scrap Deduction | (7.33) | (7.24) | (5.62) | (7.91) |
+| Home Scrap Deduction | (14.48) | (7.24) | (5.62) | (7.91) |
 | Other Conversion Cost | 16.29 | 11.32 | 17.18 | 20.64 |
-| Total Conversion Cost | 42.37 | 21.76 | 24.10 | 32.09 |
-| **Total Variable Mfg Cost** | **632.37** | **611.76** | **614.10** | **622.09** |
-| **Difference (Sc1 − Sc2)** | **(197.85)** | **(125.70)** | **0.00** | **(144.27)** |
+| Total Conversion Cost | 35.23 | 21.76 | 24.10 | 32.09 |
+| **Total Variable Mfg Cost** | **625.23** | **611.76** | **614.10** | **622.09** |
+| **Difference (Sc1 − Sc2)** | **(190.71)** | **(125.70)** | **0.00** | **(144.27)** |
 
 ### 3.2 Wire Rod — EZDK only
 
