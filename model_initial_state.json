@@ -153,12 +153,22 @@
       "yields": { "eaf": 0.8482, "ccp": 0.9805 },
       "blending_pct": { "dri": 0.70, "local_scrap": 0.209, "imported_scrap": 0.091, "home_scrap": 0.00, "pig_iron": 0.00 },
       "trade_off_ratio": 1.016,
+      "eaf_unit_prices_usd": {
+        "_source": "model_verification.md §2.1",
+        "local_scrap_t":    270.10,
+        "imported_scrap_t": 307.56
+      },
       "_note": "Detailed EAF & BCCM consumptions reconstructed as dummies to satisfy summary-level output of 467.96 $/t"
     },
     "ESR": {
       "yields": { "eaf": 0.8735, "ccp": 0.985 },
       "blending_pct": { "dri": 0.20, "local_scrap": 0.16, "imported_scrap": 0.64, "home_scrap": 0.00, "pig_iron": 0.00 },
       "trade_off_ratio": 1.017,
+      "eaf_unit_prices_usd": {
+        "_source": "model_verification.md §2.1",
+        "local_scrap_t":    270.10,
+        "imported_scrap_t": 307.56
+      },
       "_note": "Detailed EAF & BCCM consumptions reconstructed as dummies to satisfy summary-level output of 450.31 $/t"
     },
     "market": {
