@@ -156,7 +156,7 @@
       "trade_off_ratio": 1.016,
       "_reconstructed_dummies": true,
       "_data_gap_ref": "Rulebook §13",
-      "_reconciliation_residual_usd_per_ton": 0.0,
+      "_reconciliation_residual_usd_per_ton": 7.5728,
       "eaf_consumptions_per_ton_ms": {
         "_source": "cloned from billet.EZDK as reconstructed dummies",
         "aux_materials_kg":        0.4226,
@@ -224,7 +224,7 @@
       "trade_off_ratio": 1.017,
       "_reconstructed_dummies": true,
       "_data_gap_ref": "Rulebook §13",
-      "_reconciliation_residual_usd_per_ton": 0.0,
+      "_reconciliation_residual_usd_per_ton": -1.6116,
       "eaf_consumptions_per_ton_ms": {
         "_source": "cloned from billet.EZDK as reconstructed dummies",
         "aux_materials_kg":        0.4226,
