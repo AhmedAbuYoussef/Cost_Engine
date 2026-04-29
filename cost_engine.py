@@ -649,6 +649,11 @@ def _flat_line_cascade(hrc_qty_kt: float,
     }
 
 
+def _sum_numeric(values) -> float:
+    """Sum only int/float entries; skip None and string sentinels."""
+    return sum(v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool))
+
+
 def _erm_dri_supply_aggregation(state: dict,
                                 long_line: dict[str, dict],
                                 flat_line: dict[str, dict]) -> dict:
@@ -710,6 +715,143 @@ def _erm_dri_supply_aggregation(state: dict,
         "iop_total_kt": iop_total,
         "dri_supplied_sentinel": ("ERM DRI is supplied to mapped buyers; "
                                   "ERM does not produce billet"),
+    }
+
+
+def compute_production_cascade(state: dict) -> dict:
+    """Verification §5.1 + §5.2 + §5.3 — pure composition of 3a/3b/3c.
+
+    No new physics. Drives every long-line cascade from rebar+wire sales,
+    every flat-line cascade from HRC sales, and the ERM upstream rollup.
+    The output mirrors the verification sheet sections so consumers can
+    address §5.1, §5.2, §5.3 directly.
+
+    Conventions:
+    - ERM long-line row: explicit zeros across rebar/wire/billet/MS/SC/DRI/
+      scrap. IOP cell carries the aggregation's `iop_long_kt` (98.41 Kt).
+    - ERM DRI cell in monthly summary: string sentinel "supplied" — ERM
+      produces DRI for transfer to EFS+ESR, not for own consumption.
+    - Other "not-applicable" cells (Wire Rod for non-EZDK, IOP for EFS/ESR
+      without their own DRP): Python None.
+    - Total row: numeric values only; None and string sentinels are skipped.
+    - Currency tag follows the cascade convention from 3a–3c:
+      `_currency: "none"`, `_unit: "Ktons"`.
+    """
+    fp = state["finished_products"]
+    sales = state["sales"]
+    billet = state["billet"]
+
+    def _qty(c: str, p: str) -> float:
+        s = sales[c].get(p) if p in sales[c] else None
+        if s is None:
+            return 0.0
+        return float(s["local_qty_ktons"]) + float(s["export_qty_ktons"])
+
+    # 1. Long-line cascade per producer.
+    long_line: dict[str, dict] = {}
+    for company in ("EZDK", "EFS", "ESR"):
+        rebar_qty = _qty(company, "Rebar")
+        wire_qty = _qty(company, "Wire Rod") if "Wire Rod" in PRODUCTION_MATRIX[company] else 0.0
+        b = billet[company]
+        rebar_yield = fp["Rebar"][company]["rebar_yield"]
+        wire_yield = (fp["Wire Rod"][company]["wire_yield"]
+                      if "Wire Rod" in PRODUCTION_MATRIX[company] else 1.0)
+        own_dri = company in state["entities"]["dri_producers"]
+        long_line[company] = _long_line_cascade(
+            rebar_qty_kt=rebar_qty, wire_qty_kt=wire_qty,
+            rebar_yield=rebar_yield, wire_yield=wire_yield,
+            eaf_yield=b["yields"]["eaf"], ccp_yield=b["yields"]["ccp"],
+            blending_pct=b["blending_pct"],
+            mrmr=state["dri"][company]["mrmr"] if own_dri else None,
+        )
+    # ERM long-line: explicit zeros, IOP filled in after aggregation below.
+    long_line["ERM"] = {
+        "_currency": "none", "_unit": "Ktons",
+        "rebar_kt": 0.0, "wire_rod_kt": 0.0,
+        "billets_kt": 0.0, "molten_steel_kt": 0.0, "solid_charge_kt": 0.0,
+        "dri_kt": 0.0, "imported_scrap_kt": 0.0, "local_scrap_kt": 0.0,
+        "iop_kt": None,
+    }
+
+    # 2. Flat-line cascade per producer.
+    flat_line: dict[str, dict] = {}
+    for company in ("EZDK", "EFS"):
+        hrc_qty = _qty(company, "HRC")
+        h = fp["HRC"][company]
+        own_dri = company in state["entities"]["dri_producers"]
+        flat_line[company] = _flat_line_cascade(
+            hrc_qty_kt=hrc_qty,
+            eaf_yield=h["yields"]["eaf"],
+            tsc_yield=h["yields"]["tsc"],
+            hsm_yield=h["yields"]["hsm"],
+            blending_pct=h["blending_pct"],
+            mrmr=state["dri"][company]["mrmr"] if own_dri else None,
+        )
+
+    # 3. ERM aggregation (consumes the per-buyer cascades).
+    agg = _erm_dri_supply_aggregation(state, long_line, flat_line)
+    long_line["ERM"]["iop_kt"] = agg["iop_long_kt"]
+
+    # 4. Per-company monthly summary (§5.3 columns).
+    monthly: dict[str, dict] = {}
+    for company in state["entities"]["companies"]:
+        ll = long_line[company]
+        fl = flat_line.get(company)
+        in_matrix = PRODUCTION_MATRIX[company]
+        if company == "ERM":
+            # ERM doesn't produce billet; supplies DRI; reports IOP total.
+            monthly[company] = {
+                "rebar_kt": 0.0,
+                "wire_rod_kt": None,
+                "hrc_kt": None,
+                "billet_kt": 0.0,
+                "dri_kt": agg["dri_supplied_sentinel"],
+                "iop_kt": agg["iop_total_kt"],
+                "scrap_kt": None,
+            }
+            continue
+        rebar_kt = ll["rebar_kt"]
+        wire_kt = ll["wire_rod_kt"] if "Wire Rod" in in_matrix else None
+        hrc_kt = fl["hrc_kt"] if (fl is not None and "HRC" in in_matrix) else None
+        billet_kt = ll["billets_kt"]
+        # Per-company DRI consumption: long + flat (where applicable).
+        dri_kt = ll["dri_kt"] + (fl["dri_kt"] if fl is not None else 0.0)
+        # IOP only when company runs its own DRP.
+        if company in state["entities"]["dri_producers"]:
+            iop_kt = (ll["iop_kt"] or 0.0) + (fl["iop_kt"] if fl else 0.0)
+        else:
+            iop_kt = None
+        scrap_kt = (ll["imported_scrap_kt"] + ll["local_scrap_kt"]
+                    + (fl["imported_scrap_kt"] + fl["local_scrap_kt"] if fl else 0.0))
+        monthly[company] = {
+            "rebar_kt": rebar_kt,
+            "wire_rod_kt": wire_kt,
+            "hrc_kt": hrc_kt,
+            "billet_kt": billet_kt,
+            "dri_kt": dri_kt,
+            "iop_kt": iop_kt,
+            "scrap_kt": scrap_kt,
+        }
+
+    # Total row — numeric only; sentinels and None skipped.
+    monthly["Total"] = {
+        "rebar_kt":    _sum_numeric(monthly[c]["rebar_kt"]    for c in state["entities"]["companies"]),
+        "wire_rod_kt": _sum_numeric(monthly[c]["wire_rod_kt"] for c in state["entities"]["companies"]),
+        "hrc_kt":      _sum_numeric(monthly[c]["hrc_kt"]      for c in state["entities"]["companies"]),
+        "billet_kt":   _sum_numeric(monthly[c]["billet_kt"]   for c in state["entities"]["companies"]),
+        "dri_kt":      _sum_numeric(monthly[c]["dri_kt"]      for c in state["entities"]["companies"]),
+        "iop_kt":      _sum_numeric(monthly[c]["iop_kt"]      for c in state["entities"]["companies"]),
+        "scrap_kt":    _sum_numeric(monthly[c]["scrap_kt"]    for c in state["entities"]["companies"]),
+    }
+
+    return {
+        "_currency": "none",
+        "_unit": "Ktons",
+        "_note": "Quantities only; no monetary values.",
+        "long_line": long_line,
+        "flat_line": flat_line,
+        "erm_supply_aggregation": agg,
+        "monthly_summary": monthly,
     }
 
 

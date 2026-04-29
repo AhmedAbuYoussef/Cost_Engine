@@ -26,6 +26,7 @@ from cost_engine import (
     _long_line_cascade,
     _flat_line_cascade,
     _erm_dri_supply_aggregation,
+    compute_production_cascade,
 )
 
 
@@ -963,7 +964,7 @@ class TestERMSupplyAggregation:
         assert "EZDK" not in agg["long_dri_per_buyer_kt"]
         assert "EZDK" not in agg["flat_dri_per_buyer_kt"]
 
-    def test_buyer_in_supply_map_but_missing_cascade_raises(self, state):
+    def test_buyer_in_supply_map_but_missing_cascade_raises_in_aggregation(self, state):
         # Construct a state with a phantom ERM buyer; the long-line dict
         # we feed in won't have the buyer; aggregator must raise.
         s = copy.deepcopy(state)
@@ -978,6 +979,103 @@ class TestERMSupplyAggregation:
         with pytest.raises(Exception) as excinfo:
             _erm_dri_supply_aggregation(s, long_line, {})
         assert "long-line cascade" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Stage F — Verification §5.3 monthly summary + §5.1/§5.2 round-trip
+# ---------------------------------------------------------------------------
+
+class TestProductionCascade_Assembly:
+    """compute_production_cascade composes 3a/3b/3c outputs into a single
+    dict. No new physics — just structural assembly + Total row sum."""
+
+    def test_top_level_shape(self, state):
+        out = compute_production_cascade(state)
+        assert set(out.keys()) >= {"long_line", "flat_line",
+                                   "erm_supply_aggregation",
+                                   "monthly_summary"}
+        assert out["_currency"] == "none"
+        assert out["_unit"] == "Ktons"
+
+    # §5.3 row totals
+    def test_total_rebar(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["Total"]["rebar_kt"], 200.00, 0.02)
+
+    def test_total_wire_rod(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["Total"]["wire_rod_kt"], 80.00, 0.02)
+
+    def test_total_hrc(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["Total"]["hrc_kt"], 120.00, 0.02)
+
+    def test_total_billet(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["Total"]["billet_kt"], 289.88, 0.02)
+
+    def test_total_dri_excludes_erm_sentinel(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["Total"]["dri_kt"], 287.01, 0.02)
+
+    def test_total_iop_only_producers(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["Total"]["iop_kt"], 416.56, 0.02)
+
+    def test_total_scrap(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["Total"]["scrap_kt"], 201.42, 0.02)
+
+    # ERM DRI sentinel structurally
+    def test_erm_dri_is_string_sentinel(self, state):
+        erm = compute_production_cascade(state)["monthly_summary"]["ERM"]
+        assert isinstance(erm["dri_kt"], str)
+        assert "supplied" in erm["dri_kt"].lower()
+
+    def test_erm_iop_is_aggregation_total(self, state):
+        out = compute_production_cascade(state)
+        _approx_2dp(out["monthly_summary"]["ERM"]["iop_kt"], 190.57, 0.02)
+
+    def test_erm_long_line_iop_is_aggregation_long(self, state):
+        out = compute_production_cascade(state)
+        _approx_2dp(out["long_line"]["ERM"]["iop_kt"], 98.41, TOL_KT)
+
+    # Per-company monthly cells
+    def test_ezdk_monthly_dri(self, state):
+        # 110.05 (long) + 43.68 (flat) = 153.73
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["EZDK"]["dri_kt"], 153.73, 0.02)
+
+    def test_ezdk_monthly_iop(self, state):
+        # 161.77 (long) + 64.22 (flat) = 225.99
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["EZDK"]["iop_kt"], 225.99, 0.02)
+
+    def test_efs_monthly_dri(self, state):
+        # 52.02 (long) + 64.45 (flat) = 116.47
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["EFS"]["dri_kt"], 116.47, 0.02)
+
+    def test_efs_monthly_iop_is_none(self, state):
+        # EFS has no DRP — IOP shows as None in §5.3 EFS column.
+        assert compute_production_cascade(state)["monthly_summary"]["EFS"]["iop_kt"] is None
+
+    def test_esr_monthly_iop_is_none(self, state):
+        assert compute_production_cascade(state)["monthly_summary"]["ESR"]["iop_kt"] is None
+
+    def test_esr_monthly_scrap(self, state):
+        _approx_2dp(compute_production_cascade(state)["monthly_summary"]["ESR"]["scrap_kt"], 67.22, 0.02)
+
+    # Round-trip from §5.1 / §5.2 — assembled dict must contain unaltered
+    # sub-cascade values at predictable addresses.
+    def test_roundtrip_long_line_ezdk_billets(self, state):
+        out = compute_production_cascade(state)
+        _approx_2dp(out["long_line"]["EZDK"]["billets_kt"], 155.78, TOL_KT)
+
+    def test_roundtrip_long_line_efs_dri(self, state):
+        _approx_2dp(compute_production_cascade(state)["long_line"]["EFS"]["dri_kt"], 52.02, TOL_KT)
+
+    def test_roundtrip_long_line_esr_solid_charge(self, state):
+        _approx_2dp(compute_production_cascade(state)["long_line"]["ESR"]["solid_charge_kt"], 84.03, TOL_KT)
+
+    def test_roundtrip_flat_line_ezdk_iop(self, state):
+        _approx_2dp(compute_production_cascade(state)["flat_line"]["EZDK"]["iop_kt"], 64.22, TOL_KT)
+
+    def test_roundtrip_flat_line_efs_dri(self, state):
+        _approx_2dp(compute_production_cascade(state)["flat_line"]["EFS"]["dri_kt"], 64.45, TOL_KT)
+
+    def test_roundtrip_flat_line_efs_iop_is_none(self, state):
+        assert compute_production_cascade(state)["flat_line"]["EFS"]["iop_kt"] is None
 
 
 class TestComputeAll:
