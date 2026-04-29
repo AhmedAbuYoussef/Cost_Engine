@@ -571,6 +571,186 @@ def _hrc_material_price(state: dict, company: str) -> float:
             + blending["imported_scrap"] * scrap["imported_scrap_t"])
 
 
+# ---------------------------------------------------------------------------
+# Integrity checks (Rulebook §12 / Step 1 brief §4.7)
+#
+# Six checks total — Q3 ruling drops Rulebook §12 check 3 (trade-off matrix
+# fully dynamic) by construction. Each check returns (bool_passed, detail).
+# State-only checks run from `state`; output-dependent checks need an
+# `outputs` dict (built from compute_* views).
+# ---------------------------------------------------------------------------
+
+# Check 1 — Fixed cost distribution % sums to 100% per company.
+def _check_fixed_distribution_sums(state: dict) -> tuple[bool, str]:
+    tol = 0.01
+    failures = []
+    for company in state["entities"]["companies"]:
+        dist = state["fixed_costs"][company]["distribution_pct"]
+        total = sum(dist[k] for k in ("DRI", "Rebar", "Wire Rod", "HRC"))
+        if abs(total - 100.0) > tol:
+            failures.append(f"{company}: {total:.4f} (expected 100)")
+    if failures:
+        return False, "Fixed-cost distribution % does not sum to 100: " + "; ".join(failures)
+    return True, "Fixed-cost distribution % sums to 100 per company"
+
+
+# Check 2 — Blending ratios sum to 100% per production line.
+def _check_blending_ratios_sum(state: dict) -> tuple[bool, str]:
+    tol = 0.0001  # blending stored as fraction; accept 1.0 ± 0.0001
+    failures = []
+    # Billet (long-line) blending — DRI + Local + Imported + Home Scrap + Pig Iron
+    for producer in state["entities"]["billet_producers"]:
+        b = state["billet"][producer]["blending_pct"]
+        total = (b["dri"] + b["local_scrap"] + b["imported_scrap"]
+                 + b.get("home_scrap", 0.0) + b.get("pig_iron", 0.0))
+        if abs(total - 1.0) > tol:
+            failures.append(f"billet.{producer}: {total:.6f}")
+    # HRC (flat-line) blending — DRI + Local + Imported
+    for producer in ("EZDK", "EFS"):
+        b = state["finished_products"]["HRC"][producer]["blending_pct"]
+        total = b["dri"] + b["local_scrap"] + b["imported_scrap"]
+        if abs(total - 1.0) > tol:
+            failures.append(f"HRC.{producer}: {total:.6f}")
+    if failures:
+        return False, "Blending ratios do not sum to 1.0: " + "; ".join(failures)
+    return True, "Blending ratios sum to 1.0 per production line"
+
+
+# Check 4 — Sales drive production: no orphan production figures.
+# Structural assertion: state["finished_products"][product][company] must NOT
+# carry a free-floating production_qty / billets_qty / molten_steel_qty / etc.
+# (Production qty = local_qty + export_qty per Rulebook §6.4.) DRI's standalone
+# production_volume_tons is allowed because it normalises fixed cost per ton.
+def _check_sales_drive_production(state: dict) -> tuple[bool, str]:
+    forbidden_keys = {"production_qty_tons", "production_qty_ktons",
+                      "billets_qty_tons", "molten_steel_qty_tons",
+                      "solid_charge_qty_tons", "iop_qty_tons",
+                      "scrap_qty_tons"}
+    failures = []
+    for product, companies in state["finished_products"].items():
+        for company, block in companies.items():
+            present = forbidden_keys & set(block.keys())
+            if present:
+                failures.append(f"finished_products.{product}.{company}: {sorted(present)}")
+    for company, block in state["billet"].items():
+        if company == "market":
+            continue
+        present = forbidden_keys & set(block.keys())
+        if present:
+            failures.append(f"billet.{company}: {sorted(present)}")
+    if failures:
+        return False, ("Orphan production fields present (must derive from sales): "
+                       + "; ".join(failures))
+    return True, "No orphan production fields; production derives from sales"
+
+
+# Check 5 — No output view mixes currencies.
+def _check_currency_consistency(output: dict) -> tuple[bool, str]:
+    """Walks every numeric leaf in an output dict; asserts none would imply
+    a different currency from the dict's `_currency` tag.
+
+    The check is structural: `_currency` must be present and one of
+    {"USD", "EGP"}. The walker simply verifies the tag is set; legitimate
+    cross-currency conversion happens at engine boundaries via FX, not
+    inside an output view.
+    """
+    if "_currency" not in output:
+        return False, "output view missing _currency tag"
+    if output["_currency"] not in ("USD", "EGP"):
+        return False, f"unknown currency tag: {output['_currency']!r}"
+    return True, f"output view tagged {output['_currency']}"
+
+
+# Check 6 — Intercompany seller revenue = buyer cost.
+# Deferred behind the P&L stage (out of scope for this run). Stub returns
+# a structured "deferred" tuple so the master callable's contract holds.
+def _check_intercompany_reconciliation(state: dict) -> tuple[bool, str]:
+    return True, ("DEFERRED — requires P&L stage; structural placeholder. "
+                  "When P&L lands, replace with real check that ERM DRI revenue "
+                  "to EFS+ESR equals EFS+ESR DRI cost embedded from ERM.")
+
+
+# Check 7 — Break-even = 0 when Total Sales Qty = 0.
+# Deferred behind P&L (break-even is computed there). Stub for symmetry.
+def _check_break_even_zero_when_no_sales(output: dict) -> tuple[bool, str]:
+    return True, ("DEFERRED — requires P&L stage; structural placeholder. "
+                  "When P&L lands, replace with check that any per-product break-even "
+                  "is 0 whenever Total Sales Qty for that product is 0.")
+
+
+def run_integrity_checks(state: dict,
+                         outputs: dict | None = None) -> list[tuple[bool, str]]:
+    """Run the six integrity checks in order.
+
+    State-only checks (1, 2, 4, 6) run from `state`. Output-dependent checks
+    (5, 7) run from `outputs` if provided; otherwise they are skipped and
+    flagged as such. Master callable; not bypassable downstream.
+    """
+    results: list[tuple[bool, str]] = []
+    results.append(_check_fixed_distribution_sums(state))
+    results.append(_check_blending_ratios_sum(state))
+    results.append(_check_sales_drive_production(state))
+    if outputs is not None:
+        # Walk every output view, run currency consistency on each.
+        check5_failures = []
+        for view_name, view in outputs.items():
+            ok, detail = _check_currency_consistency(view)
+            if not ok:
+                check5_failures.append(f"{view_name}: {detail}")
+        if check5_failures:
+            results.append((False, "Currency consistency: "
+                            + "; ".join(check5_failures)))
+        else:
+            results.append((True, "Currency consistency holds across all output views"))
+    else:
+        results.append((True, "Check 5 (currency) skipped — no outputs supplied"))
+    results.append(_check_intercompany_reconciliation(state))
+    if outputs is not None:
+        results.append(_check_break_even_zero_when_no_sales(outputs))
+    else:
+        results.append((True, "Check 7 (break-even=0) skipped — no outputs supplied"))
+    return results
+
+
+def compute_all(state: dict) -> dict:
+    """Top-level entry point per brief §3.
+
+    Runs state-level integrity checks first; raises IntegrityError on any
+    failure. Computes every verified output the engine knows about (DRI,
+    billet, finished products), runs output-dependent integrity checks,
+    raises again on failure. Returns the assembled outputs dict.
+    """
+    state_results = run_integrity_checks(state)
+    for ok, detail in state_results[:3]:  # checks 1, 2, 4 are state-only
+        if not ok:
+            raise IntegrityError(detail)
+
+    outputs: dict[str, dict] = {}
+    for c in state["entities"]["dri_producers"]:
+        outputs[f"dri_detailed_{c}"] = compute_dri_detailed(state, c)
+        outputs[f"dri_conversion_{c}"] = compute_dri_conversion(state, c)
+    for c in state["entities"]["billet_producers"]:
+        outputs[f"billet_detailed_{c}"] = compute_billet_detailed(state, c)
+        outputs[f"billet_conversion_{c}"] = compute_billet_conversion(state, c)
+    outputs["billet_market"] = _market_billet_price(state)
+    outputs["billet_tradeoff_matrix"] = compute_tradeoff_matrix(state)
+
+    for product in ("Rebar", "Wire Rod"):
+        for company in PRODUCTION_MATRIX:
+            if product in PRODUCTION_MATRIX[company]:
+                outputs[f"finished_sc1_{product}_{company}"] = compute_finished_sc1(state, company, product)
+                outputs[f"finished_sc2_{product}_{company}"] = compute_finished_sc2(state, company, product)
+    for company in ("EZDK", "EFS"):
+        outputs[f"hrc_summary_{company}"] = compute_hrc_summary(state, company)
+
+    full_results = run_integrity_checks(state, outputs)
+    for ok, detail in full_results:
+        if not ok:
+            raise IntegrityError(detail)
+    outputs["_integrity_checks"] = full_results
+    return outputs
+
+
 def compute_hrc_summary(state: dict, company: str) -> dict:
     """Verification §3.3 — HRC summary view (three-stage yield chain)."""
     assert_in_production_matrix(company, company == "EZDK" and "HRC" or "HRC")

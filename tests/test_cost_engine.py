@@ -16,6 +16,13 @@ from cost_engine import (
     compute_finished_sc1,
     compute_finished_sc2,
     compute_hrc_summary,
+    compute_all,
+    run_integrity_checks,
+    IntegrityError,
+    _check_fixed_distribution_sums,
+    _check_blending_ratios_sum,
+    _check_sales_drive_production,
+    _check_currency_consistency,
 )
 
 
@@ -590,3 +597,122 @@ class TestSc1SourcingDispatch:
         s["finished_products"]["Rebar"]["ERM"]["sourcing_decision"] = "own"
         with pytest.raises(Exception):
             compute_finished_sc1(s, "ERM", "Rebar")
+
+
+# ---------------------------------------------------------------------------
+# Integrity checks (Rulebook §12 / Step 1 brief §4.7)
+# ---------------------------------------------------------------------------
+
+class TestIntegrityChecks_HappyPath:
+
+    def test_fixed_distribution_sums_passes(self, state):
+        ok, _ = _check_fixed_distribution_sums(state)
+        assert ok
+
+    def test_blending_ratios_sum_passes(self, state):
+        ok, _ = _check_blending_ratios_sum(state)
+        assert ok
+
+    def test_sales_drive_production_passes(self, state):
+        ok, _ = _check_sales_drive_production(state)
+        assert ok
+
+    def test_currency_consistency_passes(self, state):
+        out = compute_dri_conversion(state, "EZDK")
+        ok, _ = _check_currency_consistency(out)
+        assert ok
+
+    def test_intercompany_reconciliation_deferred(self, state):
+        # Stub returns True with "DEFERRED" detail — structure preserved
+        # for when the P&L stage lands.
+        results = run_integrity_checks(state)
+        # Check 6 is the 5th result entry (1, 2, 4, 5-stub, 6, 7-stub)
+        # but ordering is: [1, 2, 4, 5, 6, 7]
+        ok, detail = results[4]
+        assert ok and "DEFERRED" in detail
+
+    def test_break_even_deferred(self, state):
+        results = run_integrity_checks(state)
+        ok, detail = results[5]
+        assert ok and ("DEFERRED" in detail or "skipped" in detail)
+
+
+class TestIntegrityChecks_Violations:
+    """Each check fires on a deliberately broken state. Tests deepcopy first."""
+
+    def test_fixed_distribution_violation_fires(self, state):
+        s = copy.deepcopy(state)
+        s["fixed_costs"]["EZDK"]["distribution_pct"]["Rebar"] = 0  # was 25, total now 75
+        ok, detail = _check_fixed_distribution_sums(s)
+        assert not ok
+        assert "EZDK" in detail and "75" in detail
+
+    def test_blending_violation_fires(self, state):
+        s = copy.deepcopy(state)
+        s["billet"]["EZDK"]["blending_pct"]["dri"] = 0.50  # was 0.60
+        ok, detail = _check_blending_ratios_sum(s)
+        assert not ok
+        assert "EZDK" in detail
+
+    def test_sales_drive_production_violation_fires(self, state):
+        s = copy.deepcopy(state)
+        # Inject an orphan production qty that doesn't derive from sales.
+        s["finished_products"]["Rebar"]["EZDK"]["production_qty_tons"] = 99999
+        ok, detail = _check_sales_drive_production(s)
+        assert not ok
+        assert "production_qty_tons" in detail
+
+    def test_currency_consistency_violation_missing_tag(self, state):
+        bad = {"some_value": 100.0}  # no _currency tag
+        ok, _ = _check_currency_consistency(bad)
+        assert not ok
+
+    def test_currency_consistency_violation_unknown_tag(self, state):
+        bad = {"_currency": "BTC", "some_value": 100.0}
+        ok, _ = _check_currency_consistency(bad)
+        assert not ok
+
+    def test_compute_all_raises_on_state_violation(self, state):
+        s = copy.deepcopy(state)
+        s["fixed_costs"]["ERM"]["distribution_pct"]["DRI"] = 50  # was 70, total now 80
+        with pytest.raises(IntegrityError):
+            compute_all(s)
+
+
+class TestComputeAll:
+
+    def test_runs_without_error(self, state):
+        outputs = compute_all(state)
+        assert isinstance(outputs, dict)
+        assert "_integrity_checks" in outputs
+
+    def test_includes_dri_views(self, state):
+        outputs = compute_all(state)
+        assert outputs["dri_detailed_EZDK"]["_currency"] == "EGP"
+        assert outputs["dri_conversion_ERM"]["_currency"] == "USD"
+
+    def test_includes_billet_views(self, state):
+        outputs = compute_all(state)
+        assert outputs["billet_conversion_EZDK"]["_currency"] == "USD"
+        assert outputs["billet_market"]["_currency"] == "USD"
+        assert outputs["billet_tradeoff_matrix"]["_currency"] == "USD"
+
+    def test_includes_finished_views(self, state):
+        outputs = compute_all(state)
+        assert outputs["finished_sc1_Rebar_EZDK"]["_currency"] == "USD"
+        assert outputs["finished_sc2_Rebar_ERM"]["_currency"] == "USD"
+        assert outputs["hrc_summary_EFS"]["_currency"] == "USD"
+
+    def test_no_finished_for_companies_outside_production_matrix(self, state):
+        outputs = compute_all(state)
+        # ERM does not produce HRC.
+        assert "hrc_summary_ERM" not in outputs
+        # ESR does not produce HRC.
+        assert "hrc_summary_ESR" not in outputs
+        # EFS does not produce Wire Rod.
+        assert "finished_sc1_Wire Rod_EFS" not in outputs
+
+    def test_integrity_results_all_pass(self, state):
+        outputs = compute_all(state)
+        for ok, detail in outputs["_integrity_checks"]:
+            assert ok, detail
