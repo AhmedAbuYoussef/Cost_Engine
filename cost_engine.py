@@ -572,6 +572,49 @@ def _hrc_material_price(state: dict, company: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Stage F — Sales, Production Cascade, Market Share (Rulebook §6)
+# ---------------------------------------------------------------------------
+
+def _long_line_cascade(rebar_qty_kt: float,
+                       wire_qty_kt: float,
+                       *,
+                       rebar_yield: float,
+                       wire_yield: float,
+                       eaf_yield: float,
+                       ccp_yield: float,
+                       blending_pct: dict,
+                       mrmr: float | None = None) -> dict:
+    """Long-line cascade per Rulebook §6.4.
+
+    `rebar_qty_kt + wire_qty_kt` drives billets → molten steel → solid charge →
+    DRI / scrap. IOP is computed only when `mrmr` is provided (the company
+    runs its own DRP); callers without their own DRP pass `mrmr=None` and
+    receive `iop_kt=None` per the design choice for §5.1 EFS/ESR rows.
+    """
+    billets = ((rebar_qty_kt / rebar_yield) if rebar_qty_kt else 0.0) + \
+              ((wire_qty_kt  / wire_yield)  if wire_qty_kt  else 0.0)
+    ms = billets / ccp_yield
+    sc = ms / eaf_yield
+    dri = sc * blending_pct["dri"]
+    imp = sc * blending_pct["imported_scrap"]
+    loc = sc * blending_pct["local_scrap"]
+    iop = (dri * mrmr) if mrmr is not None else None
+    return {
+        "_currency": "none",
+        "_unit": "Ktons",
+        "rebar_kt": rebar_qty_kt,
+        "wire_rod_kt": wire_qty_kt,
+        "billets_kt": billets,
+        "molten_steel_kt": ms,
+        "solid_charge_kt": sc,
+        "dri_kt": dri,
+        "imported_scrap_kt": imp,
+        "local_scrap_kt": loc,
+        "iop_kt": iop,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Integrity checks (Rulebook §12 / Step 1 brief §4.7)
 #
 # Six checks total — Q3 ruling drops Rulebook §12 check 3 (trade-off matrix

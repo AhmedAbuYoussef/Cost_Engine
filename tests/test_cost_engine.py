@@ -23,6 +23,7 @@ from cost_engine import (
     _check_blending_ratios_sum,
     _check_sales_drive_production,
     _check_currency_consistency,
+    _long_line_cascade,
 )
 
 
@@ -677,6 +678,131 @@ class TestIntegrityChecks_Violations:
         s["fixed_costs"]["ERM"]["distribution_pct"]["DRI"] = 50  # was 70, total now 80
         with pytest.raises(IntegrityError):
             compute_all(s)
+
+
+# ---------------------------------------------------------------------------
+# Stage F — Verification §5.1 Long-line cascade (Rulebook §6.4)
+# ---------------------------------------------------------------------------
+
+# Cascade values in verification display to 2 dp Ktons. Engine math is direct
+# division/multiplication of clean inputs (yields, blending fractions, MRMR);
+# ±0.01 Kt is the structural tolerance.
+TOL_KT = 0.01
+
+
+class TestLongLineCascade:
+    """§5.1 cells per producer. Each helper invocation is the cell-by-cell
+    column for one company in the verification table."""
+
+    def _ezdk_cascade(self, state):
+        b = state["billet"]["EZDK"]
+        return _long_line_cascade(
+            rebar_qty_kt=70.0, wire_qty_kt=80.0,
+            rebar_yield=state["finished_products"]["Rebar"]["EZDK"]["rebar_yield"],
+            wire_yield=state["finished_products"]["Wire Rod"]["EZDK"]["wire_yield"],
+            eaf_yield=b["yields"]["eaf"], ccp_yield=b["yields"]["ccp"],
+            blending_pct=b["blending_pct"],
+            mrmr=state["dri"]["EZDK"]["mrmr"],
+        )
+
+    def _efs_cascade(self, state):
+        b = state["billet"]["EFS"]
+        return _long_line_cascade(
+            rebar_qty_kt=60.0, wire_qty_kt=0.0,
+            rebar_yield=state["finished_products"]["Rebar"]["EFS"]["rebar_yield"],
+            wire_yield=1.0,  # not used (wire qty = 0)
+            eaf_yield=b["yields"]["eaf"], ccp_yield=b["yields"]["ccp"],
+            blending_pct=b["blending_pct"],
+            mrmr=None,  # EFS has no own DRP
+        )
+
+    def _esr_cascade(self, state):
+        b = state["billet"]["ESR"]
+        return _long_line_cascade(
+            rebar_qty_kt=70.0, wire_qty_kt=0.0,
+            rebar_yield=state["finished_products"]["Rebar"]["ESR"]["rebar_yield"],
+            wire_yield=1.0,
+            eaf_yield=b["yields"]["eaf"], ccp_yield=b["yields"]["ccp"],
+            blending_pct=b["blending_pct"],
+            mrmr=None,
+        )
+
+    # EZDK column (verification §5.1)
+    def test_ezdk_currency_tag(self, state):
+        out = self._ezdk_cascade(state)
+        assert out["_currency"] == "none" and out["_unit"] == "Ktons"
+
+    def test_ezdk_rebar(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["rebar_kt"], 70.00, TOL_KT)
+
+    def test_ezdk_wire_rod(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["wire_rod_kt"], 80.00, TOL_KT)
+
+    def test_ezdk_billets(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["billets_kt"], 155.78, TOL_KT)
+
+    def test_ezdk_molten_steel(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["molten_steel_kt"], 157.72, TOL_KT)
+
+    def test_ezdk_solid_charge(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["solid_charge_kt"], 183.42, TOL_KT)
+
+    def test_ezdk_dri(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["dri_kt"], 110.05, TOL_KT)
+
+    def test_ezdk_imported_scrap(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["imported_scrap_kt"], 51.35, TOL_KT)
+
+    def test_ezdk_local_scrap(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["local_scrap_kt"], 22.01, TOL_KT)
+
+    def test_ezdk_iop(self, state):
+        _approx_2dp(self._ezdk_cascade(state)["iop_kt"], 161.77, TOL_KT)
+
+    # EFS column
+    def test_efs_billets(self, state):
+        _approx_2dp(self._efs_cascade(state)["billets_kt"], 61.80, TOL_KT)
+
+    def test_efs_molten_steel(self, state):
+        _approx_2dp(self._efs_cascade(state)["molten_steel_kt"], 63.03, TOL_KT)
+
+    def test_efs_solid_charge(self, state):
+        _approx_2dp(self._efs_cascade(state)["solid_charge_kt"], 74.31, TOL_KT)
+
+    def test_efs_dri(self, state):
+        _approx_2dp(self._efs_cascade(state)["dri_kt"], 52.02, TOL_KT)
+
+    def test_efs_imported_scrap(self, state):
+        _approx_2dp(self._efs_cascade(state)["imported_scrap_kt"], 6.76, TOL_KT)
+
+    def test_efs_local_scrap(self, state):
+        _approx_2dp(self._efs_cascade(state)["local_scrap_kt"], 15.53, TOL_KT)
+
+    def test_efs_iop_is_none(self, state):
+        # EFS has no own DRP — long-line IOP demand surfaces only via ERM aggregation.
+        assert self._efs_cascade(state)["iop_kt"] is None
+
+    # ESR column
+    def test_esr_billets(self, state):
+        _approx_2dp(self._esr_cascade(state)["billets_kt"], 72.30, TOL_KT)
+
+    def test_esr_molten_steel(self, state):
+        _approx_2dp(self._esr_cascade(state)["molten_steel_kt"], 73.40, TOL_KT)
+
+    def test_esr_solid_charge(self, state):
+        _approx_2dp(self._esr_cascade(state)["solid_charge_kt"], 84.03, TOL_KT)
+
+    def test_esr_dri(self, state):
+        _approx_2dp(self._esr_cascade(state)["dri_kt"], 16.81, TOL_KT)
+
+    def test_esr_imported_scrap(self, state):
+        _approx_2dp(self._esr_cascade(state)["imported_scrap_kt"], 53.78, TOL_KT)
+
+    def test_esr_local_scrap(self, state):
+        _approx_2dp(self._esr_cascade(state)["local_scrap_kt"], 13.44, TOL_KT)
+
+    def test_esr_iop_is_none(self, state):
+        assert self._esr_cascade(state)["iop_kt"] is None
 
 
 class TestComputeAll:
