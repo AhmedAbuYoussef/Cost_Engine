@@ -7,6 +7,73 @@ matching tolerance/xfail should be tightened or removed.
 
 ---
 
+## Tolerance widening — Finished products (§3.1, §3.2, §3.3)
+
+**Decision date:** 2026-04-24
+**Cells affected:**
+- Long-line Sc1 cells (Rebar / Wire Rod): Material Price + Total VC inherit
+  the upstream EZDK billet drift through `own_VC` (±0.45). Total Conversion
+  Cost adds the Yield Effect drift (small) and the long-line Other-Conversion
+  drift (~0.10). HRC summary cells inherit DRI-stage drift through Material
+  Price (~0.05) plus a small yield-amplification factor.
+- Total Conversion (long-line) is the sum of three drifts (Yield Effect +
+  Home Scrap + Other Conversion).
+
+**Tolerance buckets and derivations:**
+- `TOL_FINISHED_HEADLINE = 0.10` — Yield Effect, Home Scrap Deduction, Other
+  Conversion Cost (line items). Each is a single arithmetic step on input
+  values at JSON-displayed precision; bound matches the DRI/billet headline
+  precedent.
+- `TOL_FINISHED_TOTAL_CONVERSION = 0.15` — long-line Total Conversion Cost.
+  Drift bound: Yield Effect (~0.02) + Home Scrap (~0.01) + Other Conv (~0.10)
+  ≈ 0.13; rounded up to 0.15 to absorb the float-precision boundary case
+  where the rounded difference sits exactly on a tolerance edge.
+- `TOL_FINISHED_SC1_TOTAL = 0.80` — long-line Sc1 Total VC and Material
+  Price. Bound: billet drift × `1/yield_amplification` + finishing drift
+  ≈ 0.45 × 1.06 + 0.15 ≈ 0.63; rounded up to 0.80 for headroom across the
+  variation among rebar yields (0.9464 to 0.9792).
+- `TOL_FINISHED_SC2_TOTAL = 0.20` — long-line Sc2 Total VC (Material is
+  fixed at $590 so no billet drift inheritance) and HRC Total VC (residual
+  closes the data-gap portion exactly; remaining drift is finishing-stage
+  precision only).
+
+**Cells closed by `_reconciliation_residual_usd_per_ton`:**
+
+    Rebar EFS:        +1.9776  (closes Sc1 1.98 and Sc2 1.97 to ≤0.01)
+    Rebar ERM:        +9.3448  (Sc1 = Sc2 = market 590; same residual closes both)
+    Rebar ESR:       +10.6474  (closes Sc1 10.65 and Sc2 10.65 to ≤0.01)
+    Wire Rod EZDK:    0        (no verification target; informational output only)
+    HRC EZDK:        +92.5851  (closes the legitimate data-gap of cloned-from-Rebar
+                                consumption block to verification's 449.52 $/t)
+    HRC EFS:        +112.3424  (likewise to 496.83 $/t)
+
+Rebar EZDK residual stays 0 (regression anchor); the 0.55 USD/t Total VC
+gap inherits from upstream billet drift and is absorbed by
+`TOL_FINISHED_SC1_TOTAL`, not by a residual.
+
+**EFS/ERM/ESR rebar consumption/price blocks** are reconstructed dummies
+(cloned from Rebar.EZDK structure). Wire Rod EZDK and HRC EZDK/EFS likewise.
+All carry `_reconstructed_dummies: true` and `_data_gap_ref: "Rulebook §13"`.
+
+**TODO at next quarterly refresh:**
+- When real-precision consumption decimals replace the cloned dummies for
+  EFS / ERM / ESR rebar, set their `_reconciliation_residual_usd_per_ton`
+  back to 0 and add a regression test mirroring `test_ezdk_residual_is_zero`.
+  Same for Wire Rod EZDK and HRC EZDK / EFS.
+- When real-precision data lands across the board, tighten:
+    `TOL_FINISHED_SC1_TOTAL → 0.10`
+    `TOL_FINISHED_TOTAL_CONVERSION → 0.10`
+    (`TOL_FINISHED_SC2_TOTAL` and `TOL_FINISHED_HEADLINE` are already
+    consistent with the structural drift; they can stay.)
+
+**Rulebook patch needed:** §5.3 currently doesn't say HRC scrap prices are
+distinct from billet scrap prices. Verification §3.3 makes this clear in
+practice (HRC EZDK uses 261.88/270.22 vs billet EZDK's 136.81/270.22). The
+JSON now carries a separate `flat_line_scrap_prices_usd` block per HRC
+producer. Next rulebook revision should patch §5.3 to state this explicitly.
+
+---
+
 ## Tolerance widening — Billet conversion view (§2.2) and trade-off matrix (§2.3)
 
 **Decision date:** 2026-04-24

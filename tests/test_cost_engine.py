@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+import copy
+
 from cost_engine import (
     compute_dri_detailed,
     compute_dri_conversion,
@@ -11,6 +13,9 @@ from cost_engine import (
     compute_billet_conversion,
     compute_tradeoff_matrix,
     _market_billet_price,
+    compute_finished_sc1,
+    compute_finished_sc2,
+    compute_hrc_summary,
 )
 
 
@@ -393,3 +398,195 @@ class TestStrictFieldAccess:
     def test_billet_raises_on_non_producer(self, state):
         with pytest.raises(Exception):
             compute_billet_conversion(state, "ERM")  # ERM does not produce billet
+
+
+# ---------------------------------------------------------------------------
+# Verification §3.1 — Rebar (Sc1 + Sc2, all four companies)
+# ---------------------------------------------------------------------------
+
+# Long-line Sc1 Total VC inherits billet drift (own_VC carries up to ±0.45 for
+# EZDK after the JSON-precision widening) and adds the long-line own-conversion
+# drift (~5 items × 0.025 ≈ 0.13 USD/t). The bound is roughly:
+#     billet_drift × (1 + 1/yield_amplification) + finishing_drift
+#       ≈ 0.45 × 1.06 + 0.15  ≈  0.63 USD/t
+# We use ±0.80 for Sc1 Total VC. Sc2 cuts the billet-drift inheritance
+# (Material is fixed at $590), so Sc2 Total VC is bounded at ±0.20.
+# Material/Yield/HomeScrap/OtherConv (line items) stay at ±0.10.
+TOL_FINISHED_HEADLINE = 0.10
+TOL_FINISHED_TOTAL_CONVERSION = 0.15  # = yield_effect_drift + home_scrap_drift + other_conv_drift
+TOL_FINISHED_SC1_TOTAL = 0.80
+TOL_FINISHED_SC2_TOTAL = 0.20
+
+
+class TestStage3Rebar_Sc1:
+
+    def test_currency_tag(self, state):
+        assert compute_finished_sc1(state, "EZDK", "Rebar")["_currency"] == "USD"
+
+    def test_ezdk_material_price(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EZDK", "Rebar")["material_price"], 409.52, TOL_FINISHED_SC1_TOTAL)
+
+    def test_ezdk_yield_effect(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EZDK", "Rebar")["yield_effect"], 23.19, TOL_FINISHED_HEADLINE)
+
+    def test_ezdk_home_scrap(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EZDK", "Rebar")["home_scrap_deduction"], -14.48, TOL_FINISHED_HEADLINE)
+
+    def test_ezdk_other_conversion(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EZDK", "Rebar")["other_conversion_cost"], 16.29, TOL_FINISHED_HEADLINE)
+
+    def test_ezdk_total_conversion(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EZDK", "Rebar")["total_conversion_cost"], 25.00, TOL_FINISHED_TOTAL_CONVERSION)
+
+    def test_ezdk_total_vc(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EZDK", "Rebar")["total_variable_mfg_cost"], 434.52, TOL_FINISHED_SC1_TOTAL)
+
+    def test_efs_material_price(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EFS", "Rebar")["material_price"], 467.96, TOL_FINISHED_SC1_TOTAL)
+
+    def test_efs_total_vc(self, state):
+        _approx_2dp(compute_finished_sc1(state, "EFS", "Rebar")["total_variable_mfg_cost"], 486.07, TOL_FINISHED_SC1_TOTAL)
+
+    def test_erm_material_price_is_market(self, state):
+        # ERM defaults to "market" sourcing.
+        _approx_2dp(compute_finished_sc1(state, "ERM", "Rebar")["material_price"], 590.00, TOL_FINISHED_HEADLINE)
+
+    def test_erm_total_vc(self, state):
+        _approx_2dp(compute_finished_sc1(state, "ERM", "Rebar")["total_variable_mfg_cost"], 614.10, TOL_FINISHED_SC1_TOTAL)
+
+    def test_esr_material_price(self, state):
+        _approx_2dp(compute_finished_sc1(state, "ESR", "Rebar")["material_price"], 450.31, TOL_FINISHED_SC1_TOTAL)
+
+    def test_esr_total_vc(self, state):
+        _approx_2dp(compute_finished_sc1(state, "ESR", "Rebar")["total_variable_mfg_cost"], 477.81, TOL_FINISHED_SC1_TOTAL)
+
+
+class TestStage3Rebar_Sc2:
+
+    def test_ezdk_yield_effect(self, state):
+        _approx_2dp(compute_finished_sc2(state, "EZDK", "Rebar")["yield_effect"], 33.42, TOL_FINISHED_HEADLINE)
+
+    def test_ezdk_home_scrap(self, state):
+        _approx_2dp(compute_finished_sc2(state, "EZDK", "Rebar")["home_scrap_deduction"], -14.48, TOL_FINISHED_HEADLINE)
+
+    def test_ezdk_total_vc(self, state):
+        _approx_2dp(compute_finished_sc2(state, "EZDK", "Rebar")["total_variable_mfg_cost"], 625.23, TOL_FINISHED_SC2_TOTAL)
+
+    def test_efs_total_vc(self, state):
+        _approx_2dp(compute_finished_sc2(state, "EFS", "Rebar")["total_variable_mfg_cost"], 611.76, TOL_FINISHED_SC2_TOTAL)
+
+    def test_erm_total_vc(self, state):
+        _approx_2dp(compute_finished_sc2(state, "ERM", "Rebar")["total_variable_mfg_cost"], 614.10, TOL_FINISHED_SC2_TOTAL)
+
+    def test_esr_total_vc(self, state):
+        _approx_2dp(compute_finished_sc2(state, "ESR", "Rebar")["total_variable_mfg_cost"], 622.09, TOL_FINISHED_SC2_TOTAL)
+
+    def test_ezdk_difference_sc1_minus_sc2(self, state):
+        sc1 = compute_finished_sc1(state, "EZDK", "Rebar")["total_variable_mfg_cost"]
+        sc2 = compute_finished_sc2(state, "EZDK", "Rebar")["total_variable_mfg_cost"]
+        _approx_2dp(sc1 - sc2, -190.71, TOL_FINISHED_SC1_TOTAL)
+
+    def test_erm_difference_sc1_equals_sc2(self, state):
+        # ERM defaults to market; Sc1 should equal Sc2.
+        sc1 = compute_finished_sc1(state, "ERM", "Rebar")["total_variable_mfg_cost"]
+        sc2 = compute_finished_sc2(state, "ERM", "Rebar")["total_variable_mfg_cost"]
+        assert abs(sc1 - sc2) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Verification §3.2 — Wire Rod (EZDK only)
+# ---------------------------------------------------------------------------
+
+class TestStage3WireRod:
+    """§3.2 has no specific Total VC target ('can be calculated on demand');
+    we verify formula chain runs cleanly and produces the expected currency
+    tag, residual = 0, and yield effect derived from the Wire Rod yield."""
+
+    def test_currency_tag(self, state):
+        assert compute_finished_sc1(state, "EZDK", "Wire Rod")["_currency"] == "USD"
+
+    def test_yield_effect(self, state):
+        # Yield effect = own billet VC × (1/0.9778 - 1) ≈ 9.30 with TOL
+        out = compute_finished_sc1(state, "EZDK", "Wire Rod")
+        _approx_2dp(out["yield_effect"], 9.30, 0.20)
+
+    def test_residual_is_zero(self, state):
+        # Wire Rod EZDK has no verification target; residual stays 0.
+        assert state["finished_products"]["Wire Rod"]["EZDK"]["_reconciliation_residual_usd_per_ton"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Verification §3.3 — HRC (EZDK + EFS)
+# ---------------------------------------------------------------------------
+
+class TestStage3HRC:
+
+    def test_ezdk_currency_tag(self, state):
+        assert compute_hrc_summary(state, "EZDK")["_currency"] == "USD"
+
+    def test_ezdk_material_price(self, state):
+        _approx_2dp(compute_hrc_summary(state, "EZDK")["material_price"], 280.73, TOL_FINISHED_HEADLINE)
+
+    def test_ezdk_yield_effect(self, state):
+        _approx_2dp(compute_hrc_summary(state, "EZDK")["yield_effect"], 59.92, TOL_FINISHED_HEADLINE)
+
+    def test_ezdk_total_vc(self, state):
+        _approx_2dp(compute_hrc_summary(state, "EZDK")["total_variable_mfg_cost"], 449.52, TOL_FINISHED_SC2_TOTAL)
+
+    def test_efs_material_price(self, state):
+        _approx_2dp(compute_hrc_summary(state, "EFS")["material_price"], 299.96, TOL_FINISHED_HEADLINE)
+
+    def test_efs_yield_effect(self, state):
+        _approx_2dp(compute_hrc_summary(state, "EFS")["yield_effect"], 68.26, TOL_FINISHED_HEADLINE)
+
+    def test_efs_total_vc(self, state):
+        _approx_2dp(compute_hrc_summary(state, "EFS")["total_variable_mfg_cost"], 496.83, TOL_FINISHED_SC2_TOTAL)
+
+    def test_ezdk_carries_dummy_warning(self, state):
+        out = compute_hrc_summary(state, "EZDK")
+        assert "warning" in out
+
+    def test_efs_carries_dummy_warning(self, state):
+        out = compute_hrc_summary(state, "EFS")
+        assert "warning" in out
+
+
+# ---------------------------------------------------------------------------
+# Sourcing-decision dispatch (Step 1 brief §4.3)
+# ---------------------------------------------------------------------------
+
+class TestSc1SourcingDispatch:
+
+    def test_default_own_uses_billet_vc(self, state):
+        # EZDK default = "own" → material price = own billet VC (~409.52)
+        assert state["finished_products"]["Rebar"]["EZDK"]["sourcing_decision"] == "own"
+        out = compute_finished_sc1(state, "EZDK", "Rebar")
+        _approx_2dp(out["material_price"], 409.52, TOL_FINISHED_SC1_TOTAL)
+
+    def test_default_market_uses_590(self, state):
+        # ERM default = "market" → material price = $590
+        assert state["finished_products"]["Rebar"]["ERM"]["sourcing_decision"] == "market"
+        assert compute_finished_sc1(state, "ERM", "Rebar")["material_price"] == 590
+
+    def test_internal_minimum_dispatch(self, state):
+        # Switch ERM to internal_minimum; should pick the cheapest external
+        # offer in the trade-off matrix (excluding own = no own for ERM).
+        # Per verification §2.3, the minimum offer to ERM is 457.97 (from ESR).
+        s = copy.deepcopy(state)
+        s["finished_products"]["Rebar"]["ERM"]["sourcing_decision"] = "internal_minimum"
+        out = compute_finished_sc1(s, "ERM", "Rebar")
+        _approx_2dp(out["material_price"], 457.97, TOL_FINISHED_SC1_TOTAL)
+
+    def test_unknown_sourcing_raises(self, state):
+        s = copy.deepcopy(state)
+        s["finished_products"]["Rebar"]["EZDK"]["sourcing_decision"] = "bogus"
+        with pytest.raises(Exception):
+            compute_finished_sc1(s, "EZDK", "Rebar")
+
+    def test_own_for_non_producer_raises(self, state):
+        # ERM doesn't produce billet; "own" is illegal even though defaults
+        # send it to "market". Verifying the engine catches an explicit override.
+        s = copy.deepcopy(state)
+        s["finished_products"]["Rebar"]["ERM"]["sourcing_decision"] = "own"
+        with pytest.raises(Exception):
+            compute_finished_sc1(s, "ERM", "Rebar")

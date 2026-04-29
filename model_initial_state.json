@@ -305,32 +305,166 @@
           "byproduct_pct_of_billets_used": -0.043
         },
         "unit_prices_usd": {
-          "refractories_kg": 1192.0,
+          "refractories_kg": 1.192,
           "electricity_kwh":    0.06,
           "natural_gas_nm3":    0.25,
           "water_m3":           0.27,
           "byproduct_rejected_slabs_t": 318.94
         }
       },
-      "EFS": { "rebar_yield": 0.9709, "_note": "Use same consumption/price structure as EZDK; adjust to satisfy output 486.07 $/t Sc1" },
-      "ERM": { "rebar_yield": 0.9792, "_note": "ERM buys billet; sourcing is user-decision. Output 614.10 $/t Sc1 (market)" },
-      "ESR": { "rebar_yield": 0.9682, "_note": "Use same consumption/price structure; adjust to satisfy output 477.81 $/t Sc1" }
+      "EFS": {
+        "rebar_yield": 0.9709,
+        "_reconstructed_dummies": true,
+        "_data_gap_ref": "Rulebook §13",
+        "_reconciliation_residual_usd_per_ton": 1.9776,
+        "consumptions_per_ton_rebar": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg":  0.72,
+          "electricity_kwh":100.0,
+          "natural_gas_nm3": 32.0,
+          "water_m3":         0.0,
+          "work_roll_usd_t":  1.37,
+          "byproduct_pct_of_billets_used": -0.043
+        },
+        "unit_prices_usd": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg": 1.192,
+          "electricity_kwh":    0.06,
+          "natural_gas_nm3":    0.25,
+          "water_m3":           0.27,
+          "byproduct_rejected_slabs_t": 318.94
+        }
+      },
+      "ERM": {
+        "rebar_yield": 0.9792,
+        "_reconstructed_dummies": true,
+        "_data_gap_ref": "Rulebook §13",
+        "_reconciliation_residual_usd_per_ton": 9.3448,
+        "_note": "ERM buys billet; sourcing_decision defaults to 'market'. Sc1 Material Price = 590.",
+        "consumptions_per_ton_rebar": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg":  0.72,
+          "electricity_kwh":100.0,
+          "natural_gas_nm3": 32.0,
+          "water_m3":         0.0,
+          "work_roll_usd_t":  1.37,
+          "byproduct_pct_of_billets_used": -0.043
+        },
+        "unit_prices_usd": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg": 1.192,
+          "electricity_kwh":    0.06,
+          "natural_gas_nm3":    0.25,
+          "water_m3":           0.27,
+          "byproduct_rejected_slabs_t": 318.94
+        }
+      },
+      "ESR": {
+        "rebar_yield": 0.9682,
+        "_reconstructed_dummies": true,
+        "_data_gap_ref": "Rulebook §13",
+        "_reconciliation_residual_usd_per_ton": 10.6474,
+        "consumptions_per_ton_rebar": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg":  0.72,
+          "electricity_kwh":100.0,
+          "natural_gas_nm3": 32.0,
+          "water_m3":         0.0,
+          "work_roll_usd_t":  1.37,
+          "byproduct_pct_of_billets_used": -0.043
+        },
+        "unit_prices_usd": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg": 1.192,
+          "electricity_kwh":    0.06,
+          "natural_gas_nm3":    0.25,
+          "water_m3":           0.27,
+          "byproduct_rejected_slabs_t": 318.94
+        }
+      }
     },
     "Wire Rod": {
-      "EZDK": { "wire_yield": 0.9778, "_note": "Same formula as Rebar, EZDK only" }
+      "EZDK": {
+        "wire_yield": 0.9778,
+        "_reconstructed_dummies": true,
+        "_data_gap_ref": "Rulebook §13",
+        "_reconciliation_residual_usd_per_ton": 0.0,
+        "_note": "Same formula structure as Rebar, EZDK only. Verification §3.2 does not give a target Total VC; engine output is informational.",
+        "consumptions_per_ton_wire": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg":  0.72,
+          "electricity_kwh":100.0,
+          "natural_gas_nm3": 32.0,
+          "water_m3":         0.0,
+          "work_roll_usd_t":  1.37,
+          "byproduct_pct_of_billets_used": -0.043
+        },
+        "unit_prices_usd": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg": 1.192,
+          "electricity_kwh":    0.06,
+          "natural_gas_nm3":    0.25,
+          "water_m3":           0.27,
+          "byproduct_rejected_slabs_t": 318.94
+        }
+      }
     },
     "HRC": {
       "EZDK": {
         "yields": { "eaf": 0.8574, "tsc": 0.9852, "hsm": 0.9756 },
         "blending_pct": { "dri": 0.80, "local_scrap": 0.1796, "imported_scrap": 0.0204 },
-        "eaf_eaf_lf_electricity_kwh_t_ms": 693.12,
-        "_note": "Three-stage EAF → TSC → HSM build, detail reconstructed as dummy to satisfy output 449.52 $/t"
+        "flat_line_scrap_prices_usd": {
+          "_source": "model_verification.md §3.3 reconstruction (HRC scrap prices distinct from billet)",
+          "local_scrap_t":    261.88,
+          "imported_scrap_t": 270.22
+        },
+        "_reconstructed_dummies": true,
+        "_data_gap_ref": "Rulebook §13",
+        "_reconciliation_residual_usd_per_ton": 92.5851,
+        "_note": "Three-stage EAF → TSC → HSM build. Other-Conversion consumption/price block reconstructed as dummies cloned from Rebar.EZDK; residual closes the legitimate gap to 449.52 $/t.",
+        "consumptions_per_ton_hrc": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies (until real HRC consumptions are provided)",
+          "refractories_kg":  0.72,
+          "electricity_kwh":100.0,
+          "natural_gas_nm3": 32.0,
+          "water_m3":         0.0,
+          "work_roll_usd_t":  1.37
+        },
+        "unit_prices_usd": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg": 1.192,
+          "electricity_kwh":    0.06,
+          "natural_gas_nm3":    0.25,
+          "water_m3":           0.27
+        }
       },
       "EFS": {
         "yields": { "eaf": 0.8482, "tsc": 0.98, "hsm": 0.98 },
         "blending_pct": { "dri": 0.70, "local_scrap": 0.21, "imported_scrap": 0.09 },
-        "eaf_eaf_lf_electricity_kwh_t_ms": 689.84,
-        "_note": "Three-stage EAF → TSC → HSM build, detail reconstructed as dummy to satisfy output 496.83 $/t"
+        "flat_line_scrap_prices_usd": {
+          "_source": "billet.EFS.eaf_unit_prices_usd (HRC EFS uses same scrap prices as billet EFS per verification §3.3)",
+          "local_scrap_t":    270.10,
+          "imported_scrap_t": 307.56
+        },
+        "_reconstructed_dummies": true,
+        "_data_gap_ref": "Rulebook §13",
+        "_reconciliation_residual_usd_per_ton": 112.3424,
+        "_note": "Three-stage EAF → TSC → HSM build. Other-Conversion consumption/price block reconstructed as dummies cloned from Rebar.EZDK; residual closes the legitimate gap to 496.83 $/t.",
+        "consumptions_per_ton_hrc": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg":  0.72,
+          "electricity_kwh":100.0,
+          "natural_gas_nm3": 32.0,
+          "water_m3":         0.0,
+          "work_roll_usd_t":  1.37
+        },
+        "unit_prices_usd": {
+          "_source": "cloned from Rebar.EZDK as reconstructed dummies",
+          "refractories_kg": 1.192,
+          "electricity_kwh":    0.06,
+          "natural_gas_nm3":    0.25,
+          "water_m3":           0.27
+        }
       }
     }
   },

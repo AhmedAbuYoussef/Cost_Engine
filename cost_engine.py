@@ -402,3 +402,210 @@ def compute_tradeoff_matrix(state: dict) -> dict:
         "minima": minima,
         "own_vc": own_vc,
     }
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Finished Products (Rulebook §5)
+# ---------------------------------------------------------------------------
+
+# Long-line Other-Conversion items (Rebar / Wire Rod): consumption key + price key.
+_LONG_LINE_CONVERSION_ITEMS: tuple[tuple[str, str], ...] = (
+    ("refractories_kg",  "refractories_kg"),
+    ("electricity_kwh",  "electricity_kwh"),
+    ("natural_gas_nm3",  "natural_gas_nm3"),
+    ("water_m3",         "water_m3"),
+)
+
+# HRC Other-Conversion items (cloned-from-Rebar shape: same physical items,
+# residual closes the gap to the verified Total VC).
+_HRC_CONVERSION_ITEMS = _LONG_LINE_CONVERSION_ITEMS
+
+_PRODUCT_YIELD_KEYS = {
+    "Rebar":    "rebar_yield",
+    "Wire Rod": "wire_yield",
+}
+
+_PRODUCT_CONSUMPTION_KEYS = {
+    "Rebar":    "consumptions_per_ton_rebar",
+    "Wire Rod": "consumptions_per_ton_wire",
+}
+
+
+def _resolve_finished_material_price_sc1(state: dict, company: str, product: str) -> float:
+    """Dispatch on `sourcing_decision` per Step 1 brief §4.3.
+
+    own              → own billet VC
+    market           → 590
+    internal_minimum → cheapest external offer in the trade-off matrix
+                       for this company (i.e. excluding own billet)
+    """
+    decision = state["finished_products"][product][company]["sourcing_decision"]
+    if decision == "own":
+        if company not in state["entities"]["billet_producers"]:
+            raise StateValidationError(
+                f"sourcing_decision='own' invalid for {company} {product}: "
+                f"{company} does not produce billet"
+            )
+        return compute_billet_conversion(state, company)["total_variable_mfg_cost"]
+    if decision == "market":
+        return state["billet"]["market"]["market_price_usd_t"]
+    if decision == "internal_minimum":
+        matrix = compute_tradeoff_matrix(state)
+        external_offers = [matrix["rows"][s]["to"][company]
+                           for s in matrix["rows"]
+                           if s != company]
+        return min(external_offers)
+    raise StateValidationError(
+        f"unknown sourcing_decision '{decision}' for {company} {product}"
+    )
+
+
+def _finished_yield_effect(material_price: float, finished_yield: float) -> float:
+    """Long-line yield effect — only the finishing-mill yield (EAF×CCP already
+    embedded in billet cost). Rulebook §5.2."""
+    return material_price * (1.0 / finished_yield - 1.0)
+
+
+def _finished_home_scrap_deduction(finished_yield: float, byproduct_pct: float,
+                                   byproduct_price_usd: float) -> float:
+    """$/t finished. Negative number. Per Rulebook §5.2:
+        billets_used_per_finished_ton = 1 / yield
+        byproduct_per_finished_ton    = billets_used × byproduct_pct
+        $/t finished                  = byproduct_per_finished × byproduct_price
+    Inputs identical between Sc1 and Sc2 — value depends on yield/pct/price only.
+    """
+    return (1.0 / finished_yield) * byproduct_pct * byproduct_price_usd
+
+
+def _finished_other_conversion(consumptions: dict, prices: dict,
+                               items: tuple[tuple[str, str], ...]) -> dict:
+    """Sum of finishing-stage Other Conversion items (no work_roll yet)."""
+    out = {ck: consumptions[ck] * prices[pk] for ck, pk in items}
+    return {"items": out, "subtotal": sum(out.values())}
+
+
+def _long_line_total_vc(state: dict, company: str, product: str,
+                        material_price: float) -> dict:
+    """Shared Sc1 / Sc2 chain for Rebar and Wire Rod (Rulebook §5.2)."""
+    block = state["finished_products"][product][company]
+    yield_key = _PRODUCT_YIELD_KEYS[product]
+    cons_key = _PRODUCT_CONSUMPTION_KEYS[product]
+    finished_yield = block[yield_key]
+    cons = block[cons_key]
+    prices = block["unit_prices_usd"]
+
+    yield_effect = _finished_yield_effect(material_price, finished_yield)
+    home_scrap = _finished_home_scrap_deduction(
+        finished_yield,
+        cons["byproduct_pct_of_billets_used"],
+        prices["byproduct_rejected_slabs_t"],
+    )
+    other_conv = _finished_other_conversion(cons, prices, _LONG_LINE_CONVERSION_ITEMS)
+    other_conv_total = other_conv["subtotal"] + cons["work_roll_usd_t"]
+    residual = block.get("_reconciliation_residual_usd_per_ton", 0.0)
+    other_conv_total += residual
+    total_conv = yield_effect + home_scrap + other_conv_total
+    total_vc = material_price + total_conv
+
+    return {
+        "material_price": material_price,
+        "yield_effect": yield_effect,
+        "home_scrap_deduction": home_scrap,
+        "other_conversion_cost": other_conv_total,
+        "other_conversion_breakdown": {**other_conv["items"],
+                                       "work_roll": cons["work_roll_usd_t"],
+                                       "reconciliation_residual": residual},
+        "total_conversion_cost": total_conv,
+        "total_variable_mfg_cost": total_vc,
+        "reconciliation_residual": residual,
+    }
+
+
+def compute_finished_sc1(state: dict, company: str, product: str) -> dict:
+    """Verification §3.1 Sc1 (long-line: Rebar / Wire Rod)."""
+    assert_in_production_matrix(company, product)
+    if product == "HRC":
+        raise StateValidationError(
+            "compute_finished_sc1 is for long-line products; "
+            "use compute_hrc_summary for HRC"
+        )
+    block = state["finished_products"][product][company]
+    material = _resolve_finished_material_price_sc1(state, company, product)
+    chain = _long_line_total_vc(state, company, product, material)
+    out = {"_currency": "USD", "_unit": "$/t", "company": company,
+           "product": product, "scenario": "Sc1", **chain}
+    if block.get("_reconstructed_dummies"):
+        out["warning"] = ("detailed Other Conversion is reconstructed from "
+                          "Rebar.EZDK; only the summary Total VC is verified")
+    return out
+
+
+def compute_finished_sc2(state: dict, company: str, product: str) -> dict:
+    """Verification §3.1 Sc2 (long-line: market billet at $590)."""
+    assert_in_production_matrix(company, product)
+    if product == "HRC":
+        raise StateValidationError(
+            "compute_finished_sc2 is for long-line products; "
+            "use compute_hrc_summary for HRC"
+        )
+    block = state["finished_products"][product][company]
+    material = state["billet"]["market"]["market_price_usd_t"]
+    chain = _long_line_total_vc(state, company, product, material)
+    out = {"_currency": "USD", "_unit": "$/t", "company": company,
+           "product": product, "scenario": "Sc2", **chain}
+    if block.get("_reconstructed_dummies"):
+        out["warning"] = ("detailed Other Conversion is reconstructed from "
+                          "Rebar.EZDK; only the summary Total VC is verified")
+    return out
+
+
+def _hrc_material_price(state: dict, company: str) -> float:
+    """Verification §3.3 — HRC material uses flat-line scrap prices,
+    distinct from billet scrap prices (Rulebook §5.3 to be patched)."""
+    hrc = state["finished_products"]["HRC"][company]
+    blending = hrc["blending_pct"]
+    scrap = hrc["flat_line_scrap_prices_usd"]
+    dri_price = _resolve_dri_price_for_buyer(state, company)
+    return (blending["dri"]            * dri_price
+            + blending["local_scrap"]    * scrap["local_scrap_t"]
+            + blending["imported_scrap"] * scrap["imported_scrap_t"])
+
+
+def compute_hrc_summary(state: dict, company: str) -> dict:
+    """Verification §3.3 — HRC summary view (three-stage yield chain)."""
+    assert_in_production_matrix(company, company == "EZDK" and "HRC" or "HRC")
+    if company not in state["finished_products"]["HRC"]:
+        raise StateValidationError(f"{company} does not produce HRC")
+    block = state["finished_products"]["HRC"][company]
+    yields = block["yields"]
+    combined_yield = yields["eaf"] * yields["tsc"] * yields["hsm"]
+
+    material = _hrc_material_price(state, company)
+    yield_effect = material * (1.0 / combined_yield - 1.0)
+    cons = block["consumptions_per_ton_hrc"]
+    prices = block["unit_prices_usd"]
+    other_conv = _finished_other_conversion(cons, prices, _HRC_CONVERSION_ITEMS)
+    other_conv_total = other_conv["subtotal"] + cons["work_roll_usd_t"]
+    residual = block.get("_reconciliation_residual_usd_per_ton", 0.0)
+    other_conv_total += residual
+    total_vc = material + yield_effect + other_conv_total
+
+    out = {
+        "_currency": "USD",
+        "_unit": "$/t",
+        "company": company,
+        "product": "HRC",
+        "material_price": material,
+        "yield_effect": yield_effect,
+        "other_conversion_cost": other_conv_total,
+        "other_conversion_breakdown": {**other_conv["items"],
+                                       "work_roll": cons["work_roll_usd_t"],
+                                       "reconciliation_residual": residual},
+        "total_variable_mfg_cost": total_vc,
+        "combined_yield": combined_yield,
+        "reconciliation_residual": residual,
+    }
+    if block.get("_reconstructed_dummies"):
+        out["warning"] = ("detailed Other Conversion is reconstructed; "
+                          "only the summary Total VC is verified")
+    return out
