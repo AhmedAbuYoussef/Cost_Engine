@@ -24,6 +24,7 @@ from cost_engine import (
     _check_sales_drive_production,
     _check_currency_consistency,
     _long_line_cascade,
+    _flat_line_cascade,
 )
 
 
@@ -803,6 +804,86 @@ class TestLongLineCascade:
 
     def test_esr_iop_is_none(self, state):
         assert self._esr_cascade(state)["iop_kt"] is None
+
+
+# ---------------------------------------------------------------------------
+# Stage F — Verification §5.2 Flat-line cascade (Rulebook §6.5)
+# ---------------------------------------------------------------------------
+
+class TestFlatLineCascade:
+    """§5.2 cells per producer (EZDK + EFS only — ERM/ESR don't make HRC)."""
+
+    def _ezdk_flat(self, state):
+        h = state["finished_products"]["HRC"]["EZDK"]
+        return _flat_line_cascade(
+            hrc_qty_kt=45.0,
+            eaf_yield=h["yields"]["eaf"],
+            tsc_yield=h["yields"]["tsc"],
+            hsm_yield=h["yields"]["hsm"],
+            blending_pct=h["blending_pct"],
+            mrmr=state["dri"]["EZDK"]["mrmr"],
+        )
+
+    def _efs_flat(self, state):
+        h = state["finished_products"]["HRC"]["EFS"]
+        return _flat_line_cascade(
+            hrc_qty_kt=75.0,
+            eaf_yield=h["yields"]["eaf"],
+            tsc_yield=h["yields"]["tsc"],
+            hsm_yield=h["yields"]["hsm"],
+            blending_pct=h["blending_pct"],
+            mrmr=None,  # EFS has no own DRP — IOP surfaces via ERM aggregation
+        )
+
+    # EZDK column (verification §5.2)
+    def test_ezdk_currency_tag(self, state):
+        out = self._ezdk_flat(state)
+        assert out["_currency"] == "none" and out["_unit"] == "Ktons"
+
+    def test_ezdk_hrc(self, state):
+        _approx_2dp(self._ezdk_flat(state)["hrc_kt"], 45.00, TOL_KT)
+
+    def test_ezdk_molten_steel(self, state):
+        _approx_2dp(self._ezdk_flat(state)["molten_steel_kt"], 46.82, TOL_KT)
+
+    def test_ezdk_solid_charge(self, state):
+        _approx_2dp(self._ezdk_flat(state)["solid_charge_kt"], 54.61, TOL_KT)
+
+    def test_ezdk_dri(self, state):
+        _approx_2dp(self._ezdk_flat(state)["dri_kt"], 43.68, TOL_KT)
+
+    def test_ezdk_imported_scrap(self, state):
+        _approx_2dp(self._ezdk_flat(state)["imported_scrap_kt"], 1.11, TOL_KT)
+
+    def test_ezdk_local_scrap(self, state):
+        _approx_2dp(self._ezdk_flat(state)["local_scrap_kt"], 9.81, TOL_KT)
+
+    def test_ezdk_iop(self, state):
+        _approx_2dp(self._ezdk_flat(state)["iop_kt"], 64.22, TOL_KT)
+
+    # EFS column
+    def test_efs_hrc(self, state):
+        _approx_2dp(self._efs_flat(state)["hrc_kt"], 75.00, TOL_KT)
+
+    def test_efs_molten_steel(self, state):
+        _approx_2dp(self._efs_flat(state)["molten_steel_kt"], 78.09, TOL_KT)
+
+    def test_efs_solid_charge(self, state):
+        _approx_2dp(self._efs_flat(state)["solid_charge_kt"], 92.07, TOL_KT)
+
+    def test_efs_dri(self, state):
+        _approx_2dp(self._efs_flat(state)["dri_kt"], 64.45, TOL_KT)
+
+    def test_efs_imported_scrap(self, state):
+        _approx_2dp(self._efs_flat(state)["imported_scrap_kt"], 8.29, TOL_KT)
+
+    def test_efs_local_scrap(self, state):
+        _approx_2dp(self._efs_flat(state)["local_scrap_kt"], 19.33, TOL_KT)
+
+    def test_efs_iop_is_none(self, state):
+        # EFS HRC DRI comes from ERM. EFS's own flat cascade returns None;
+        # the 92.16 Kt IOP for ERM appears in _erm_dri_supply_aggregation.
+        assert self._efs_flat(state)["iop_kt"] is None
 
 
 class TestComputeAll:

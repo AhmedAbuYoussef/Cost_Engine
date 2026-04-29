@@ -614,6 +614,41 @@ def _long_line_cascade(rebar_qty_kt: float,
     }
 
 
+def _flat_line_cascade(hrc_qty_kt: float,
+                       *,
+                       eaf_yield: float,
+                       tsc_yield: float,
+                       hsm_yield: float,
+                       blending_pct: dict,
+                       mrmr: float | None = None) -> dict:
+    """Flat-line cascade per Rulebook §6.5.
+
+    Three-stage yield chain for HRC: HRC → MS via TSC×HSM → solid charge via
+    EAF → DRI / scrap. IOP only when `mrmr` is supplied (matches the long-line
+    convention from `_long_line_cascade`); EFS HRC passes `mrmr=None` and the
+    ERM-side IOP demand is computed separately by the supply aggregation step.
+    Flat-line blending is DRI / Local Scrap / Imported Scrap only — no home
+    scrap or pig iron on this stage per the JSON / verification §5.2.
+    """
+    ms = hrc_qty_kt / (tsc_yield * hsm_yield)
+    sc = ms / eaf_yield
+    dri = sc * blending_pct["dri"]
+    imp = sc * blending_pct["imported_scrap"]
+    loc = sc * blending_pct["local_scrap"]
+    iop = (dri * mrmr) if mrmr is not None else None
+    return {
+        "_currency": "none",
+        "_unit": "Ktons",
+        "hrc_kt": hrc_qty_kt,
+        "molten_steel_kt": ms,
+        "solid_charge_kt": sc,
+        "dri_kt": dri,
+        "imported_scrap_kt": imp,
+        "local_scrap_kt": loc,
+        "iop_kt": iop,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Integrity checks (Rulebook §12 / Step 1 brief §4.7)
 #
