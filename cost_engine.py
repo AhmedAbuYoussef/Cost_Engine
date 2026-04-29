@@ -856,6 +856,132 @@ def compute_production_cascade(state: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Stage F — Sales aggregation and market share (Rulebook §6.1–§6.3)
+# ---------------------------------------------------------------------------
+
+def _producers_of(state: dict, product: str) -> list[str]:
+    """Companies producing `product` per the production matrix, in the
+    fixed order EZDK / EFS / ERM / ESR."""
+    return [c for c in state["entities"]["companies"]
+            if product in PRODUCTION_MATRIX[c]]
+
+
+def compute_sales_summary(state: dict) -> dict:
+    """Verification §4.1 + §4.2 + §4.3 — pure passthrough from state.
+
+    Returns a container dict with four single-currency sub-views so each
+    can stand alone for integrity check 5:
+
+        monthly_plan_ktons       — local/export Ktons per company×product
+                                   plus group totals (§4.1)
+        local_prices_le_t        — local selling prices in LE/t (§4.2 left)
+        export_prices_usd_t      — export selling prices in USD/t (§4.2 right)
+        export_expense_rates_usd_t — export expense rates in USD/t (§4.3)
+
+    Products a company doesn't produce do not appear as keys
+    (structural-non-existence per system-prompt §5).
+    """
+    sales = state["sales"]
+
+    monthly: dict = {"_currency": "none", "_unit": "Ktons"}
+    local_prices: dict = {"_currency": "EGP", "_unit": "LE/t"}
+    export_prices: dict = {"_currency": "USD", "_unit": "$/t"}
+    export_rates: dict = {"_currency": "USD", "_unit": "$/t"}
+
+    for product in state["entities"]["products"]:
+        producers = _producers_of(state, product)
+        per_product_qty: dict[str, dict] = {}
+        per_product_local: dict[str, float] = {}
+        per_product_export: dict[str, float] = {}
+        per_product_rate: dict[str, float] = {}
+        group_local = 0.0
+        group_export = 0.0
+        for company in producers:
+            if product not in sales[company]:
+                continue
+            row = sales[company][product]
+            local_qty = float(row["local_qty_ktons"])
+            export_qty = float(row["export_qty_ktons"])
+            per_product_qty[company] = {
+                "local_qty_ktons": local_qty,
+                "export_qty_ktons": export_qty,
+                "total_qty_ktons": local_qty + export_qty,
+            }
+            per_product_local[company] = float(row["local_price_le_t"])
+            per_product_export[company] = float(row["export_price_usd_t"])
+            per_product_rate[company] = float(row["export_expense_usd_t"])
+            group_local += local_qty
+            group_export += export_qty
+        per_product_qty["group"] = {
+            "local_ktons": group_local,
+            "export_ktons": group_export,
+            "total_ktons": group_local + group_export,
+        }
+        monthly[product] = per_product_qty
+        local_prices[product] = per_product_local
+        export_prices[product] = per_product_export
+        export_rates[product] = per_product_rate
+
+    return {
+        "_currency": "none",
+        "_unit": "container",
+        "monthly_plan_ktons": monthly,
+        "local_prices_le_t": local_prices,
+        "export_prices_usd_t": export_prices,
+        "export_expense_rates_usd_t": export_rates,
+    }
+
+
+def compute_market_share(state: dict) -> dict:
+    """Verification §4.4 — Rulebook §6.3.
+
+        group_local_ktons        = Σ local sales across companies (per product)
+        total_local_market_ktons = state.market_shares.<product>.total_local_market_ktons
+        market_share_pct         = group / total × 100
+        company_pct_of_group     = company_local / group_local × 100 (per company)
+
+    Per Q6 ruling (brief §8): when total_local_market_ktons is null/None,
+    market_share_pct is None and the per-product dict carries
+    `_note: "HRC total local market not yet provided"` (or the analogous
+    wording for any other product with the same data gap).
+    """
+    sales = state["sales"]
+    out: dict = {"_currency": "none", "_unit": "%"}
+    for product in state["entities"]["products"]:
+        producers = _producers_of(state, product)
+        per_company_local: dict[str, float] = {}
+        for company in producers:
+            if product not in sales[company]:
+                continue
+            per_company_local[company] = float(
+                sales[company][product]["local_qty_ktons"])
+        group_local = sum(per_company_local.values())
+        total_market = state["market_shares"].get(product, {}).get(
+            "total_local_market_ktons")
+        if total_market is None:
+            entry = {
+                "group_local_ktons": group_local,
+                "total_local_market_ktons": None,
+                "market_share_pct": None,
+                "company_pct_of_group": (
+                    {c: (q / group_local * 100.0 if group_local else 0.0)
+                     for c, q in per_company_local.items()}),
+                "_note": f"{product} total local market not yet provided",
+            }
+        else:
+            entry = {
+                "group_local_ktons": group_local,
+                "total_local_market_ktons": float(total_market),
+                "market_share_pct": (group_local / float(total_market)) * 100.0,
+                "company_pct_of_group": (
+                    {c: (q / group_local * 100.0 if group_local else 0.0)
+                     for c, q in per_company_local.items()}),
+            }
+        out[product] = entry
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Integrity checks (Rulebook §12 / Step 1 brief §4.7)
 #
 # Six checks total — Q3 ruling drops Rulebook §12 check 3 (trade-off matrix
@@ -934,13 +1060,15 @@ def _check_currency_consistency(output: dict) -> tuple[bool, str]:
     a different currency from the dict's `_currency` tag.
 
     The check is structural: `_currency` must be present and one of
-    {"USD", "EGP"}. The walker simply verifies the tag is set; legitimate
-    cross-currency conversion happens at engine boundaries via FX, not
-    inside an output view.
+    {"USD", "EGP", "none"}. "none" applies to dimensionless / unit-only
+    outputs (production cascades in Ktons, market-share percentages, etc.)
+    where there is no monetary conversion to verify. Legitimate cross-
+    currency conversion happens at engine boundaries via FX, not inside
+    an output view.
     """
     if "_currency" not in output:
         return False, "output view missing _currency tag"
-    if output["_currency"] not in ("USD", "EGP"):
+    if output["_currency"] not in ("USD", "EGP", "none"):
         return False, f"unknown currency tag: {output['_currency']!r}"
     return True, f"output view tagged {output['_currency']}"
 

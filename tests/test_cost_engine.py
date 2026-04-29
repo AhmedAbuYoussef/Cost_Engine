@@ -27,6 +27,8 @@ from cost_engine import (
     _flat_line_cascade,
     _erm_dri_supply_aggregation,
     compute_production_cascade,
+    compute_sales_summary,
+    compute_market_share,
 )
 
 
@@ -1076,6 +1078,210 @@ class TestProductionCascade_Assembly:
 
     def test_roundtrip_flat_line_efs_iop_is_none(self, state):
         assert compute_production_cascade(state)["flat_line"]["EFS"]["iop_kt"] is None
+
+
+# ---------------------------------------------------------------------------
+# Stage F — Verification §4.1, §4.2, §4.3 — Sales summary
+# ---------------------------------------------------------------------------
+
+class TestSales_MonthlyPlan:
+    """Cell-for-cell against verification §4.1 (Ktons)."""
+
+    def _qty(self, state, product, company):
+        return compute_sales_summary(state)["monthly_plan_ktons"][product][company]
+
+    # Rebar Local row
+    def test_rebar_local_ezdk(self, state):
+        assert self._qty(state, "Rebar", "EZDK")["local_qty_ktons"] == 70
+
+    def test_rebar_local_efs(self, state):
+        assert self._qty(state, "Rebar", "EFS")["local_qty_ktons"] == 60
+
+    def test_rebar_local_erm(self, state):
+        assert self._qty(state, "Rebar", "ERM")["local_qty_ktons"] == 0
+
+    def test_rebar_local_esr(self, state):
+        assert self._qty(state, "Rebar", "ESR")["local_qty_ktons"] == 70
+
+    # Rebar Export row
+    def test_rebar_export_all_zero(self, state):
+        for c in ("EZDK", "EFS", "ERM", "ESR"):
+            assert self._qty(state, "Rebar", c)["export_qty_ktons"] == 0
+
+    # Wire Rod (EZDK only)
+    def test_wire_rod_local_ezdk(self, state):
+        assert self._qty(state, "Wire Rod", "EZDK")["local_qty_ktons"] == 40
+
+    def test_wire_rod_export_ezdk(self, state):
+        assert self._qty(state, "Wire Rod", "EZDK")["export_qty_ktons"] == 40
+
+    # HRC (EZDK + EFS only)
+    def test_hrc_local_ezdk(self, state):
+        assert self._qty(state, "HRC", "EZDK")["local_qty_ktons"] == 45
+
+    def test_hrc_local_efs(self, state):
+        assert self._qty(state, "HRC", "EFS")["local_qty_ktons"] == 0
+
+    def test_hrc_export_ezdk(self, state):
+        assert self._qty(state, "HRC", "EZDK")["export_qty_ktons"] == 0
+
+    def test_hrc_export_efs(self, state):
+        assert self._qty(state, "HRC", "EFS")["export_qty_ktons"] == 75
+
+    # Group totals
+    def test_group_rebar(self, state):
+        g = compute_sales_summary(state)["monthly_plan_ktons"]["Rebar"]["group"]
+        assert g["local_ktons"] == 200 and g["export_ktons"] == 0 and g["total_ktons"] == 200
+
+    def test_group_wire_rod(self, state):
+        g = compute_sales_summary(state)["monthly_plan_ktons"]["Wire Rod"]["group"]
+        assert g["local_ktons"] == 40 and g["export_ktons"] == 40 and g["total_ktons"] == 80
+
+    def test_group_hrc(self, state):
+        g = compute_sales_summary(state)["monthly_plan_ktons"]["HRC"]["group"]
+        assert g["local_ktons"] == 45 and g["export_ktons"] == 75 and g["total_ktons"] == 120
+
+    # Structural-non-existence: EFS Wire Rod, ERM Wire Rod, ESR Wire Rod
+    # / ERM HRC, ESR HRC must not appear as keys.
+    def test_efs_wire_rod_absent(self, state):
+        assert "EFS" not in compute_sales_summary(state)["monthly_plan_ktons"]["Wire Rod"]
+
+    def test_erm_wire_rod_absent(self, state):
+        assert "ERM" not in compute_sales_summary(state)["monthly_plan_ktons"]["Wire Rod"]
+
+    def test_esr_hrc_absent(self, state):
+        assert "ESR" not in compute_sales_summary(state)["monthly_plan_ktons"]["HRC"]
+
+    def test_currency_tag(self, state):
+        out = compute_sales_summary(state)["monthly_plan_ktons"]
+        assert out["_currency"] == "none" and out["_unit"] == "Ktons"
+
+
+class TestSales_SellingPrices:
+    """Cell-for-cell against verification §4.2."""
+
+    # Local prices in LE/t
+    def test_rebar_local_prices(self, state):
+        p = compute_sales_summary(state)["local_prices_le_t"]["Rebar"]
+        assert p["EZDK"] == 8910 and p["EFS"] == 8860 and p["ERM"] == 8860 and p["ESR"] == 8860
+
+    def test_wire_rod_local_price_ezdk(self, state):
+        assert compute_sales_summary(state)["local_prices_le_t"]["Wire Rod"]["EZDK"] == 8860
+
+    def test_hrc_local_prices(self, state):
+        p = compute_sales_summary(state)["local_prices_le_t"]["HRC"]
+        assert p["EZDK"] == 8750 and p["EFS"] == 8750
+
+    # Export prices in $/t
+    def test_rebar_export_prices(self, state):
+        p = compute_sales_summary(state)["export_prices_usd_t"]["Rebar"]
+        assert p["EZDK"] == 500 and p["EFS"] == 500 and p["ERM"] == 500 and p["ESR"] == 500
+
+    def test_wire_rod_export_price_ezdk(self, state):
+        assert compute_sales_summary(state)["export_prices_usd_t"]["Wire Rod"]["EZDK"] == 520
+
+    def test_hrc_export_price_ezdk(self, state):
+        assert compute_sales_summary(state)["export_prices_usd_t"]["HRC"]["EZDK"] == 540
+
+    def test_hrc_export_price_efs(self, state):
+        assert compute_sales_summary(state)["export_prices_usd_t"]["HRC"]["EFS"] == 521
+
+    def test_local_prices_currency_tag(self, state):
+        out = compute_sales_summary(state)["local_prices_le_t"]
+        assert out["_currency"] == "EGP" and out["_unit"] == "LE/t"
+
+    def test_export_prices_currency_tag(self, state):
+        out = compute_sales_summary(state)["export_prices_usd_t"]
+        assert out["_currency"] == "USD" and out["_unit"] == "$/t"
+
+
+class TestSales_ExportExpenses:
+    """Cell-for-cell against verification §4.3 — passthrough rates."""
+
+    def test_efs_hrc_rate(self, state):
+        assert compute_sales_summary(state)["export_expense_rates_usd_t"]["HRC"]["EFS"] == 0.15
+
+    def test_ezdk_wire_rod_rate(self, state):
+        assert compute_sales_summary(state)["export_expense_rates_usd_t"]["Wire Rod"]["EZDK"] == 0.2
+
+    def test_ezdk_hrc_rate(self, state):
+        assert compute_sales_summary(state)["export_expense_rates_usd_t"]["HRC"]["EZDK"] == 0.8
+
+    def test_others_zero(self, state):
+        rates = compute_sales_summary(state)["export_expense_rates_usd_t"]
+        # Rebar: all four companies = 0
+        for c in ("EZDK", "EFS", "ERM", "ESR"):
+            assert rates["Rebar"][c] == 0.0
+        # HRC EFS = 0.15 (already tested), EZDK = 0.8 (already tested) — no other HRC entries
+
+    def test_currency_tag(self, state):
+        out = compute_sales_summary(state)["export_expense_rates_usd_t"]
+        assert out["_currency"] == "USD" and out["_unit"] == "$/t"
+
+
+# ---------------------------------------------------------------------------
+# Stage F — Verification §4.4 — Market share
+# ---------------------------------------------------------------------------
+
+# Market share displays to 2 dp percent; ±0.01 pp tolerance.
+TOL_PCT = 0.01
+
+
+class TestMarketShare:
+
+    def test_currency_tag(self, state):
+        out = compute_market_share(state)
+        assert out["_currency"] == "none" and out["_unit"] == "%"
+
+    def test_rebar_group_local(self, state):
+        assert compute_market_share(state)["Rebar"]["group_local_ktons"] == 200
+
+    def test_rebar_total_market(self, state):
+        assert compute_market_share(state)["Rebar"]["total_local_market_ktons"] == 440
+
+    def test_rebar_market_share_pct(self, state):
+        # 200/440 × 100 = 45.4545%
+        _approx_2dp(compute_market_share(state)["Rebar"]["market_share_pct"], 45.45, TOL_PCT)
+
+    def test_rebar_company_pct_of_group(self, state):
+        cpg = compute_market_share(state)["Rebar"]["company_pct_of_group"]
+        # 70/200=35, 60/200=30, 0/200=0, 70/200=35
+        assert cpg["EZDK"] == 35.0 and cpg["EFS"] == 30.0
+        assert cpg["ERM"] == 0.0 and cpg["ESR"] == 35.0
+
+    def test_wire_rod_group_local(self, state):
+        assert compute_market_share(state)["Wire Rod"]["group_local_ktons"] == 40
+
+    def test_wire_rod_total_market(self, state):
+        assert compute_market_share(state)["Wire Rod"]["total_local_market_ktons"] == 60
+
+    def test_wire_rod_market_share_pct(self, state):
+        # 40/60 × 100 = 66.6667
+        _approx_2dp(compute_market_share(state)["Wire Rod"]["market_share_pct"], 66.67, TOL_PCT)
+
+    def test_wire_rod_company_pct_of_group(self, state):
+        cpg = compute_market_share(state)["Wire Rod"]["company_pct_of_group"]
+        assert cpg == {"EZDK": 100.0}
+
+    # HRC — Q6 ruling: market_share_pct is None when total_local_market is null
+    def test_hrc_market_share_is_none(self, state):
+        assert compute_market_share(state)["HRC"]["market_share_pct"] is None
+
+    def test_hrc_total_market_is_none(self, state):
+        assert compute_market_share(state)["HRC"]["total_local_market_ktons"] is None
+
+    def test_hrc_group_local_still_computed(self, state):
+        # Group local for HRC is computable (45 Ktons); only the share is None.
+        assert compute_market_share(state)["HRC"]["group_local_ktons"] == 45
+
+    def test_hrc_note_present(self, state):
+        hrc = compute_market_share(state)["HRC"]
+        assert "_note" in hrc
+        assert "HRC" in hrc["_note"] and "not yet provided" in hrc["_note"]
+
+    def test_hrc_does_not_raise(self, state):
+        # Q6 ruling explicitly: HRC null market does NOT raise.
+        compute_market_share(state)  # would raise if it were going to
 
 
 class TestComputeAll:
