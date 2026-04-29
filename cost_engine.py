@@ -649,6 +649,70 @@ def _flat_line_cascade(hrc_qty_kt: float,
     }
 
 
+def _erm_dri_supply_aggregation(state: dict,
+                                long_line: dict[str, dict],
+                                flat_line: dict[str, dict]) -> dict:
+    """Aggregate ERM-supplied DRI demand and compute ERM's IOP requirement.
+
+    ERM runs a DRP but produces no billet — its IOP demand is entirely
+    driven by buyers in `state["entities"]["dri_supply_map"]` whose value is
+    "ERM". For each such buyer we sum their long-line + flat-line DRI Ktons
+    (flat = 0 for buyers without an HRC presence per the production matrix).
+    ERM's IOP requirement = Σ buyer DRI × ERM's MRMR. The output preserves
+    the long-vs-flat split so verification §5.1, §5.2, §5.3 can be populated
+    from this single dict.
+
+    Inputs are pre-computed cascade dicts (per-buyer) rather than re-running
+    from state — the caller (compute_production_cascade) already has them
+    and pure-function discipline benefits from explicit inputs.
+
+    Buyers mapped to ERM but missing from the long-line cascade raise
+    StateValidationError; the supply map is authoritative and silent
+    skipping would mask data drift.
+
+    Capacity check against ERM DRP `production_volume_tons` (68,821 t in
+    current state) is NOT enforced here — that belongs to a downstream
+    integrity check; this function is an arithmetic aggregator.
+    """
+    erm_mrmr = state["dri"]["ERM"]["mrmr"]
+    supply_map = state["entities"]["dri_supply_map"]
+    erm_buyers = [buyer for buyer, supplier in supply_map.items()
+                  if supplier == "ERM"]
+
+    long_dri_per_buyer: dict[str, float] = {}
+    flat_dri_per_buyer: dict[str, float] = {}
+    for buyer in erm_buyers:
+        if buyer not in long_line:
+            raise StateValidationError(
+                f"buyer '{buyer}' mapped to ERM in dri_supply_map but missing "
+                f"from long-line cascade output"
+            )
+        long_dri_per_buyer[buyer] = long_line[buyer]["dri_kt"]
+        flat_dri_per_buyer[buyer] = (flat_line[buyer]["dri_kt"]
+                                     if buyer in flat_line else 0.0)
+
+    long_total_dri = sum(long_dri_per_buyer.values())
+    flat_total_dri = sum(flat_dri_per_buyer.values())
+    iop_long = long_total_dri * erm_mrmr
+    iop_flat = flat_total_dri * erm_mrmr
+    iop_total = iop_long + iop_flat
+
+    return {
+        "_currency": "none",
+        "_unit": "Ktons",
+        "erm_buyers": erm_buyers,
+        "long_dri_per_buyer_kt": long_dri_per_buyer,
+        "flat_dri_per_buyer_kt": flat_dri_per_buyer,
+        "long_dri_total_kt": long_total_dri,
+        "flat_dri_total_kt": flat_total_dri,
+        "iop_long_kt": iop_long,
+        "iop_flat_kt": iop_flat,
+        "iop_total_kt": iop_total,
+        "dri_supplied_sentinel": ("ERM DRI is supplied to mapped buyers; "
+                                  "ERM does not produce billet"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Integrity checks (Rulebook §12 / Step 1 brief §4.7)
 #

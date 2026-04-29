@@ -25,6 +25,7 @@ from cost_engine import (
     _check_currency_consistency,
     _long_line_cascade,
     _flat_line_cascade,
+    _erm_dri_supply_aggregation,
 )
 
 
@@ -884,6 +885,99 @@ class TestFlatLineCascade:
         # EFS HRC DRI comes from ERM. EFS's own flat cascade returns None;
         # the 92.16 Kt IOP for ERM appears in _erm_dri_supply_aggregation.
         assert self._efs_flat(state)["iop_kt"] is None
+
+
+# ---------------------------------------------------------------------------
+# Stage F — Verification §5.1/§5.2/§5.3 ERM IOP aggregation
+# ---------------------------------------------------------------------------
+
+class TestERMSupplyAggregation:
+    """Verification §5.1 footnote (ERM long-line IOP), §5.2 footnote (ERM
+    flat-line IOP), §5.3 ERM total IOP. Tolerance is ±0.01 Kt for the
+    individual long/flat cells; ±0.02 Kt is acceptable on the total per
+    the session direction (rounding propagation), but full-precision math
+    actually reconciles to ±0.01."""
+
+    def _agg(self, state):
+        # Build per-buyer cascade dicts (full precision, no intermediate rounding).
+        long_line = {}
+        flat_line = {}
+        for c in ("EFS", "ESR"):
+            b = state["billet"][c]
+            long_line[c] = _long_line_cascade(
+                rebar_qty_kt={"EFS": 60.0, "ESR": 70.0}[c],
+                wire_qty_kt=0.0,
+                rebar_yield=state["finished_products"]["Rebar"][c]["rebar_yield"],
+                wire_yield=1.0,
+                eaf_yield=b["yields"]["eaf"], ccp_yield=b["yields"]["ccp"],
+                blending_pct=b["blending_pct"], mrmr=None,
+            )
+        h = state["finished_products"]["HRC"]["EFS"]
+        flat_line["EFS"] = _flat_line_cascade(
+            hrc_qty_kt=75.0,
+            eaf_yield=h["yields"]["eaf"], tsc_yield=h["yields"]["tsc"],
+            hsm_yield=h["yields"]["hsm"], blending_pct=h["blending_pct"], mrmr=None,
+        )
+        return _erm_dri_supply_aggregation(state, long_line, flat_line)
+
+    def test_currency_tag(self, state):
+        agg = self._agg(state)
+        assert agg["_currency"] == "none" and agg["_unit"] == "Ktons"
+
+    def test_erm_buyers_driven_by_supply_map(self, state):
+        # Confirms drive-from-map, not hardcoded list. Current map: EFS, ESR → ERM.
+        assert sorted(self._agg(state)["erm_buyers"]) == ["EFS", "ESR"]
+
+    def test_long_iop(self, state):
+        _approx_2dp(self._agg(state)["iop_long_kt"], 98.41, TOL_KT)
+
+    def test_flat_iop(self, state):
+        _approx_2dp(self._agg(state)["iop_flat_kt"], 92.16, TOL_KT)
+
+    def test_total_iop(self, state):
+        # Per session: ±0.02 Kt is acceptable; full-precision actually ≤ ±0.01.
+        _approx_2dp(self._agg(state)["iop_total_kt"], 190.57, 0.02)
+
+    def test_dri_supplied_sentinel_is_string_not_number(self, state):
+        agg = self._agg(state)
+        assert isinstance(agg["dri_supplied_sentinel"], str)
+        assert "supplied" in agg["dri_supplied_sentinel"].lower()
+        # And no numeric "ERM DRI" cell anywhere — ERM doesn't produce DRI for sale,
+        # only for transfer; the aggregation reports IOP, not a DRI flow back to ERM.
+        assert "dri_to_erm_kt" not in agg
+
+    def test_map_driven_invariant(self, state):
+        # Recompute totals from the supply map directly inside the test,
+        # asserting the aggregator obeys the map.
+        agg = self._agg(state)
+        long_total = sum(agg["long_dri_per_buyer_kt"].values())
+        flat_total = sum(agg["flat_dri_per_buyer_kt"].values())
+        erm_mrmr = state["dri"]["ERM"]["mrmr"]
+        assert abs(agg["iop_total_kt"] - (long_total + flat_total) * erm_mrmr) < 1e-9
+
+    def test_ezdk_unaffected(self, state):
+        # EZDK self-supplies; aggregation must not list EZDK as an ERM buyer
+        # and must not contribute to ERM IOP.
+        agg = self._agg(state)
+        assert "EZDK" not in agg["erm_buyers"]
+        assert "EZDK" not in agg["long_dri_per_buyer_kt"]
+        assert "EZDK" not in agg["flat_dri_per_buyer_kt"]
+
+    def test_buyer_in_supply_map_but_missing_cascade_raises(self, state):
+        # Construct a state with a phantom ERM buyer; the long-line dict
+        # we feed in won't have the buyer; aggregator must raise.
+        s = copy.deepcopy(state)
+        s["entities"]["dri_supply_map"]["PHANTOM_CO"] = "ERM"
+        long_line = {"EFS": _long_line_cascade(60.0, 0.0,
+            rebar_yield=s["finished_products"]["Rebar"]["EFS"]["rebar_yield"],
+            wire_yield=1.0,
+            eaf_yield=s["billet"]["EFS"]["yields"]["eaf"],
+            ccp_yield=s["billet"]["EFS"]["yields"]["ccp"],
+            blending_pct=s["billet"]["EFS"]["blending_pct"], mrmr=None)}
+        # Note: ESR and PHANTOM_CO both missing from long_line; first hit will raise.
+        with pytest.raises(Exception) as excinfo:
+            _erm_dri_supply_aggregation(s, long_line, {})
+        assert "long-line cascade" in str(excinfo.value)
 
 
 class TestComputeAll:
