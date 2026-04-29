@@ -29,6 +29,7 @@ from cost_engine import (
     compute_production_cascade,
     compute_sales_summary,
     compute_market_share,
+    _check_sales_cascade_reconciliation,
 )
 
 
@@ -629,17 +630,22 @@ class TestIntegrityChecks_HappyPath:
         assert ok
 
     def test_intercompany_reconciliation_deferred(self, state):
-        # Stub returns True with "DEFERRED" detail — structure preserved
-        # for when the P&L stage lands.
+        # Stub returns True with "DEFERRED" detail. Result order with the
+        # check-4 reconciliation arm now in place:
+        #   [0] check 1 fixed dist
+        #   [1] check 2 blending
+        #   [2] check 4 state arm
+        #   [3] check 4 reconciliation arm
+        #   [4] check 5 currency
+        #   [5] check 6 intercompany
+        #   [6] check 7 break-even
         results = run_integrity_checks(state)
-        # Check 6 is the 5th result entry (1, 2, 4, 5-stub, 6, 7-stub)
-        # but ordering is: [1, 2, 4, 5, 6, 7]
-        ok, detail = results[4]
+        ok, detail = results[5]
         assert ok and "DEFERRED" in detail
 
     def test_break_even_deferred(self, state):
         results = run_integrity_checks(state)
-        ok, detail = results[5]
+        ok, detail = results[6]
         assert ok and ("DEFERRED" in detail or "skipped" in detail)
 
 
@@ -683,6 +689,100 @@ class TestIntegrityChecks_Violations:
         s["fixed_costs"]["ERM"]["distribution_pct"]["DRI"] = 50  # was 70, total now 80
         with pytest.raises(IntegrityError):
             compute_all(s)
+
+
+class TestIntegrityChecks_ReconciliationArm:
+    """Output-level arm of integrity check 4: cascade reconciles to sales-
+    driven expectations. Tests use directly-built outputs dicts to exercise
+    the function in isolation."""
+
+    def _outputs(self, state):
+        return {
+            "sales_summary": compute_sales_summary(state),
+            "production_cascade": compute_production_cascade(state),
+        }
+
+    def test_happy_path_passes(self, state):
+        outs = self._outputs(state)
+        ok, detail = _check_sales_cascade_reconciliation(
+            outs["sales_summary"], outs["production_cascade"], state)
+        assert ok
+        assert "Sales cascade reconciliation passed" in detail
+
+    def test_happy_path_counts_cells(self, state):
+        outs = self._outputs(state)
+        _, detail = _check_sales_cascade_reconciliation(
+            outs["sales_summary"], outs["production_cascade"], state)
+        assert "4 companies" in detail
+        # Long-line per company: 6 base cells. ERM has b['yields'] but
+        # rebar=wire=0 → all expected = 0 = actual. Self-supplied IOP only
+        # for EZDK in long line. Flat-line: 5 cells per HRC producer + 1
+        # IOP for EZDK only. Total = 6×4 + 1 + 5×2 + 1 = 36.
+        assert "36 cells" in detail
+
+    def test_erm_zero_sales_passes(self, state):
+        outs = self._outputs(state)
+        ok, _ = _check_sales_cascade_reconciliation(
+            outs["sales_summary"], outs["production_cascade"], state)
+        # ERM has 0 sales; expected = 0 = actual; passes without dividing by yield.
+        assert ok
+
+    def test_violation_fires_with_detail(self, state):
+        outs = self._outputs(state)
+        outs["production_cascade"]["long_line"]["EZDK"]["billets_kt"] = 200.00
+        ok, detail = _check_sales_cascade_reconciliation(
+            outs["sales_summary"], outs["production_cascade"], state)
+        assert not ok
+        assert "EZDK long billets" in detail
+        assert "expected" in detail and "got" in detail
+
+    def test_tolerance_within_passes(self, state):
+        outs = self._outputs(state)
+        actual = outs["production_cascade"]["long_line"]["EZDK"]["billets_kt"]
+        outs["production_cascade"]["long_line"]["EZDK"]["billets_kt"] = actual * 1.0005
+        ok, _ = _check_sales_cascade_reconciliation(
+            outs["sales_summary"], outs["production_cascade"], state)
+        assert ok
+
+    def test_tolerance_outside_fails(self, state):
+        outs = self._outputs(state)
+        actual = outs["production_cascade"]["long_line"]["EZDK"]["billets_kt"]
+        outs["production_cascade"]["long_line"]["EZDK"]["billets_kt"] = actual * 1.002
+        ok, detail = _check_sales_cascade_reconciliation(
+            outs["sales_summary"], outs["production_cascade"], state)
+        assert not ok
+        assert "EZDK long billets" in detail
+
+    def test_routing_missing_sales_summary(self, state):
+        outs = {"production_cascade": compute_production_cascade(state)}
+        results = run_integrity_checks(state, outs)
+        ok, detail = results[3]
+        assert not ok
+        assert "missing sales_summary" in detail
+
+    def test_routing_missing_production_cascade(self, state):
+        outs = {"sales_summary": compute_sales_summary(state)}
+        results = run_integrity_checks(state, outs)
+        ok, detail = results[3]
+        assert not ok
+        assert "missing production_cascade" in detail
+
+    def test_routing_skipped_when_outputs_none(self, state):
+        results = run_integrity_checks(state, outputs=None)
+        ok, detail = results[3]
+        assert ok and "skipped" in detail
+
+    def test_state_arm_independent_of_recon_arm(self, state):
+        s = copy.deepcopy(state)
+        s["finished_products"]["Rebar"]["EZDK"]["production_qty_tons"] = 99999
+        outs = {"sales_summary": compute_sales_summary(s),
+                "production_cascade": compute_production_cascade(s)}
+        results = run_integrity_checks(s, outs)
+        # State arm at index 2; reconciliation arm at index 3.
+        state_ok, state_detail = results[2]
+        recon_ok, _ = results[3]
+        assert not state_ok and "production_qty_tons" in state_detail
+        assert recon_ok  # reconciliation still consistent with sales
 
 
 # ---------------------------------------------------------------------------

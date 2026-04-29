@@ -990,6 +990,14 @@ def compute_market_share(state: dict) -> dict:
 # `outputs` dict (built from compute_* views).
 # ---------------------------------------------------------------------------
 
+# Tolerance for the cascade reconciliation arm of integrity check 4. Drift
+# from full-precision math should be < 1e-9; ABS_TOL=1e-6 swallows that, and
+# REL_TOL=1e-3 (0.1%) catches any off-by-one-stage composition bug while
+# allowing legitimate floating-point noise.
+RECON_REL_TOL = 1e-3
+RECON_ABS_TOL = 1e-6
+
+
 # Check 1 — Fixed cost distribution % sums to 100% per company.
 def _check_fixed_distribution_sums(state: dict) -> tuple[bool, str]:
     tol = 0.01
@@ -1054,6 +1062,135 @@ def _check_sales_drive_production(state: dict) -> tuple[bool, str]:
     return True, "No orphan production fields; production derives from sales"
 
 
+def _check_sales_cascade_reconciliation(sales_outputs: dict,
+                                        cascade_outputs: dict,
+                                        state: dict) -> tuple[bool, str]:
+    """Output-level arm of integrity check 4 (Rulebook §12 / brief §4.7).
+
+    For each company × line, recompute every cascade stage from sales-driven
+    inputs (rebar/wire/HRC qty) and the company's yields/blending, then assert
+    the cascade output matches within tolerance. Per-company self-consistency
+    only — ERM's cross-company IOP aggregation is checked separately by
+    `_erm_dri_supply_aggregation` (covered in tests 3c/3d).
+
+    The IOP cell is compared only when the company self-supplies its DRI
+    (`dri_supply_map[company] == company`); for ERM-supplied buyers,
+    long-line/flat-line IOP comes from upstream aggregation and is skipped.
+
+    Tolerance: abs(diff) ≤ max(REL_TOL × expected, ABS_TOL).
+    """
+    qty = sales_outputs["monthly_plan_ktons"]
+    long_line = cascade_outputs["long_line"]
+    flat_line = cascade_outputs["flat_line"]
+    fp = state["finished_products"]
+    billet = state["billet"]
+    supply_map = state["entities"]["dri_supply_map"]
+
+    cells_checked = 0
+
+    def _within_tol(expected: float, actual: float) -> bool:
+        return abs(actual - expected) <= max(RECON_REL_TOL * abs(expected),
+                                             RECON_ABS_TOL)
+
+    def _detail(company: str, line: str, stage: str,
+                expected: float, actual: float) -> str:
+        diff = actual - expected
+        tol = max(RECON_REL_TOL * abs(expected), RECON_ABS_TOL)
+        return (f"Cascade reconciliation failed: {company} {line} {stage}: "
+                f"expected {expected:.4f} Kt, got {actual:.4f} Kt "
+                f"(diff {diff:.6f}, tolerance {tol:.6f})")
+
+    for company in state["entities"]["companies"]:
+        # ----- Long line: walked for every company so ERM's zero-sales /
+        # zero-cascade path is asserted 0 = 0 explicitly.
+        rebar_kt = qty["Rebar"][company]["total_qty_ktons"] if company in qty["Rebar"] else 0.0
+        wire_kt = (qty["Wire Rod"][company]["total_qty_ktons"]
+                   if "Wire Rod" in qty and company in qty["Wire Rod"] else 0.0)
+        if rebar_kt == 0 and wire_kt == 0:
+            # Zero-sales path: skip yield/blending lookup (which may not exist
+            # for non-billet-producers like ERM); expected = 0 throughout.
+            expected_billets = 0.0
+            expected_ms = 0.0
+            expected_sc = 0.0
+            expected_dri = 0.0
+            expected_imp = 0.0
+            expected_loc = 0.0
+        else:
+            b = billet[company]
+            rebar_yield = fp["Rebar"][company]["rebar_yield"]
+            wire_yield = (fp["Wire Rod"][company]["wire_yield"]
+                          if "Wire Rod" in fp and company in fp["Wire Rod"] else 1.0)
+            eaf_y = b["yields"]["eaf"]
+            ccp_y = b["yields"]["ccp"]
+            blend = b["blending_pct"]
+            expected_billets = ((rebar_kt / rebar_yield) if rebar_kt else 0.0) + \
+                               ((wire_kt / wire_yield) if wire_kt else 0.0)
+            expected_ms = expected_billets / ccp_y
+            expected_sc = expected_ms / eaf_y
+            expected_dri = expected_sc * blend["dri"]
+            expected_imp = expected_sc * blend["imported_scrap"]
+            expected_loc = expected_sc * blend["local_scrap"]
+
+        actual = long_line[company]
+        for stage_name, expected, actual_v in (
+            ("billets",  expected_billets, actual["billets_kt"]),
+            ("MS",       expected_ms,      actual["molten_steel_kt"]),
+            ("SC",       expected_sc,      actual["solid_charge_kt"]),
+            ("DRI",      expected_dri,     actual["dri_kt"]),
+            ("imp_scrap",expected_imp,     actual["imported_scrap_kt"]),
+            ("loc_scrap",expected_loc,     actual["local_scrap_kt"]),
+        ):
+            cells_checked += 1
+            if not _within_tol(expected, actual_v):
+                return False, _detail(company, "long", stage_name, expected, actual_v)
+
+        # IOP only when company self-supplies its DRI. ERM's long-line IOP
+        # comes from cross-company aggregation and is checked elsewhere.
+        if supply_map.get(company) == company:
+            mrmr = state["dri"][company]["mrmr"]
+            expected_iop = expected_dri * mrmr
+            cells_checked += 1
+            if not _within_tol(expected_iop, actual["iop_kt"]):
+                return False, _detail(company, "long", "IOP",
+                                      expected_iop, actual["iop_kt"])
+
+        # ----- Flat line -----
+        if "HRC" in qty and company in qty["HRC"]:
+            hrc_qty = qty["HRC"][company]["total_qty_ktons"]
+            h = fp["HRC"][company]
+            yields = h["yields"]
+            blend = h["blending_pct"]
+            expected_ms = hrc_qty / (yields["tsc"] * yields["hsm"])
+            expected_sc = expected_ms / yields["eaf"]
+            expected_dri = expected_sc * blend["dri"]
+            expected_imp = expected_sc * blend["imported_scrap"]
+            expected_loc = expected_sc * blend["local_scrap"]
+
+            actual = flat_line[company]
+            for stage_name, expected, actual_v in (
+                ("MS",       expected_ms,  actual["molten_steel_kt"]),
+                ("SC",       expected_sc,  actual["solid_charge_kt"]),
+                ("DRI",      expected_dri, actual["dri_kt"]),
+                ("imp_scrap",expected_imp, actual["imported_scrap_kt"]),
+                ("loc_scrap",expected_loc, actual["local_scrap_kt"]),
+            ):
+                cells_checked += 1
+                if not _within_tol(expected, actual_v):
+                    return False, _detail(company, "flat", stage_name, expected, actual_v)
+
+            if supply_map.get(company) == company:
+                mrmr = state["dri"][company]["mrmr"]
+                expected_iop = expected_dri * mrmr
+                cells_checked += 1
+                if not _within_tol(expected_iop, actual["iop_kt"]):
+                    return False, _detail(company, "flat", "IOP",
+                                          expected_iop, actual["iop_kt"])
+
+    n_companies = len(state["entities"]["companies"])
+    return True, (f"Sales cascade reconciliation passed: "
+                  f"{n_companies} companies, {cells_checked} cells")
+
+
 # Check 5 — No output view mixes currencies.
 def _check_currency_consistency(output: dict) -> tuple[bool, str]:
     """Walks every numeric leaf in an output dict; asserts none would imply
@@ -1101,11 +1238,29 @@ def run_integrity_checks(state: dict,
     results: list[tuple[bool, str]] = []
     results.append(_check_fixed_distribution_sums(state))
     results.append(_check_blending_ratios_sum(state))
+    # Check 4 — state arm: orphan production fields in state.
     results.append(_check_sales_drive_production(state))
+    # Check 4 — output arm: cascade reconciles to sales-driven expectations.
+    if outputs is not None:
+        sales_summary = outputs.get("sales_summary")
+        cascade = outputs.get("production_cascade")
+        if sales_summary is None:
+            results.append((False, "Cannot run check 4 reconciliation arm: "
+                                   "missing sales_summary in outputs"))
+        elif cascade is None:
+            results.append((False, "Cannot run check 4 reconciliation arm: "
+                                   "missing production_cascade in outputs"))
+        else:
+            results.append(_check_sales_cascade_reconciliation(
+                sales_summary, cascade, state))
+    else:
+        results.append((True, "Check 4 reconciliation arm skipped — no outputs supplied"))
     if outputs is not None:
         # Walk every output view, run currency consistency on each.
         check5_failures = []
         for view_name, view in outputs.items():
+            if not isinstance(view, dict) or "_currency" not in view:
+                continue  # non-view bookkeeping entries (e.g. _integrity_checks list)
             ok, detail = _check_currency_consistency(view)
             if not ok:
                 check5_failures.append(f"{view_name}: {detail}")
@@ -1154,6 +1309,12 @@ def compute_all(state: dict) -> dict:
                 outputs[f"finished_sc2_{product}_{company}"] = compute_finished_sc2(state, company, product)
     for company in ("EZDK", "EFS"):
         outputs[f"hrc_summary_{company}"] = compute_hrc_summary(state, company)
+
+    # Stage F outputs (§4 + §5). Both keys are required by the integrity
+    # check 4 reconciliation arm; broader sub-view exposure happens in 3g.
+    outputs["sales_summary"] = compute_sales_summary(state)
+    outputs["production_cascade"] = compute_production_cascade(state)
+    outputs["market_share"] = compute_market_share(state)
 
     full_results = run_integrity_checks(state, outputs)
     for ok, detail in full_results:
