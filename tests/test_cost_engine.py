@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from cost_engine import compute_dri_detailed, compute_dri_conversion
+from cost_engine import (
+    compute_dri_detailed,
+    compute_dri_conversion,
+    compute_billet_detailed,
+    compute_billet_conversion,
+    compute_tradeoff_matrix,
+    _market_billet_price,
+)
 
 
 # Tolerances per Step 1 brief §6.
@@ -216,6 +223,151 @@ class TestStage1DRI_Conversion:
 # Strict-field-access guardrail
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Verification §2.2 — Billet Conversion ($/t)
+# ---------------------------------------------------------------------------
+
+# Same precision-drift caveat as DRI conversion view: Material Price and
+# Yield Effect are derived from headline blending+yield+price inputs and
+# should hit ±0.05; the Total VC for EFS and ESR is closed by a
+# `_reconciliation_residual_usd_per_ton` field per TESTING_NOTES.md.
+TOL_BILLET = 0.10
+
+
+class TestStage2Billet_Conversion:
+
+    def test_currency_tag(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert out["_currency"] == "USD"
+
+    def test_ezdk_material_price(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EZDK")["material_price"], 263.21, TOL_BILLET)
+
+    def test_ezdk_yield_effect(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EZDK")["yield_effect"], 46.70, TOL_BILLET)
+
+    def test_ezdk_other_conversion(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EZDK")["other_conversion_cost"], 99.61, TOL_BILLET)
+
+    def test_ezdk_total_conversion(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EZDK")["total_conversion_cost"], 146.31, TOL_BILLET)
+
+    def test_ezdk_total_variable_mfg_cost(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EZDK")["total_variable_mfg_cost"], 409.52, TOL_BILLET)
+
+    def test_efs_material_price(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EFS")["material_price"], 299.98, TOL_BILLET)
+
+    def test_efs_yield_effect(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EFS")["yield_effect"], 60.72, TOL_BILLET)
+
+    def test_efs_total_variable_mfg_cost(self, state):
+        _approx_2dp(compute_billet_conversion(state, "EFS")["total_variable_mfg_cost"], 467.96, TOL_BILLET)
+
+    def test_esr_material_price(self, state):
+        _approx_2dp(compute_billet_conversion(state, "ESR")["material_price"], 303.15, TOL_BILLET)
+
+    def test_esr_yield_effect(self, state):
+        _approx_2dp(compute_billet_conversion(state, "ESR")["yield_effect"], 49.19, TOL_BILLET)
+
+    def test_esr_total_variable_mfg_cost(self, state):
+        _approx_2dp(compute_billet_conversion(state, "ESR")["total_variable_mfg_cost"], 450.31, TOL_BILLET)
+
+    def test_efs_carries_dummy_warning(self, state):
+        out = compute_billet_conversion(state, "EFS")
+        assert "warning" in out and "reconstructed dummies" in out["warning"]
+
+    def test_esr_carries_dummy_warning(self, state):
+        out = compute_billet_conversion(state, "ESR")
+        assert "warning" in out and "reconstructed dummies" in out["warning"]
+
+    def test_ezdk_no_dummy_warning(self, state):
+        # EZDK has real data; no dummy warning expected.
+        assert "warning" not in compute_billet_conversion(state, "EZDK")
+
+    def test_ezdk_residual_is_zero(self, state):
+        # Regression anchor: EZDK has real data; residual must stay 0.
+        assert state["billet"]["EZDK"]["_reconciliation_residual_usd_per_ton"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Verification §2.3 — Trade-off Matrix
+# ---------------------------------------------------------------------------
+
+class TestStage2TradeoffMatrix:
+
+    def test_ezdk_external_offer(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["EZDK"]["price_external_usd_t"], 478.73, TOL_BILLET)
+
+    def test_efs_external_offer(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["EFS"]["price_external_usd_t"], 475.45, TOL_BILLET)
+
+    def test_esr_external_offer(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["ESR"]["price_external_usd_t"], 457.97, TOL_BILLET)
+
+    def test_market_offer(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert m["rows"]["Market"]["price_external_usd_t"] == 590.00
+
+    def test_diagonal_ezdk(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["EZDK"]["to"]["EZDK"], 409.52, TOL_BILLET)
+
+    def test_diagonal_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["EFS"]["to"]["EFS"], 467.96, TOL_BILLET)
+
+    def test_diagonal_esr(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["ESR"]["to"]["ESR"], 450.31, TOL_BILLET)
+
+    def test_offdiagonal_ezdk_to_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["EZDK"]["to"]["EFS"], 478.73, TOL_BILLET)
+
+    def test_offdiagonal_esr_to_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        _approx_2dp(m["rows"]["ESR"]["to"]["EFS"], 457.97, TOL_BILLET)
+
+    def test_minimum_to_ezdk(self, state):
+        _approx_2dp(compute_tradeoff_matrix(state)["minima"]["EZDK"], 409.52, TOL_BILLET)
+
+    def test_minimum_to_efs(self, state):
+        _approx_2dp(compute_tradeoff_matrix(state)["minima"]["EFS"], 457.97, TOL_BILLET)
+
+    def test_minimum_to_erm(self, state):
+        _approx_2dp(compute_tradeoff_matrix(state)["minima"]["ERM"], 457.97, TOL_BILLET)
+
+    def test_minimum_to_esr(self, state):
+        _approx_2dp(compute_tradeoff_matrix(state)["minima"]["ESR"], 450.31, TOL_BILLET)
+
+
+# ---------------------------------------------------------------------------
+# Verification §2.4 — Market Billet Build-up
+# ---------------------------------------------------------------------------
+
+class TestStage2MarketBilletBuildup:
+
+    def test_base(self, state):
+        assert _market_billet_price(state)["base"] == 428
+
+    def test_safe_guards(self, state):
+        assert _market_billet_price(state)["safe_guards"] == 74
+
+    def test_other_costs(self, state):
+        assert _market_billet_price(state)["other_costs"] == 88
+
+    def test_market_price(self, state):
+        assert _market_billet_price(state)["market_price"] == 590
+
+
+# ---------------------------------------------------------------------------
+# Strict-field-access guardrail
+# ---------------------------------------------------------------------------
+
 class TestStrictFieldAccess:
     """Engine must raise on missing fields rather than default silently."""
 
@@ -226,3 +378,7 @@ class TestStrictFieldAccess:
     def test_dri_detailed_raises_on_non_producer(self, state):
         with pytest.raises(Exception):
             compute_dri_detailed(state, "EFS")  # EFS does not produce DRI
+
+    def test_billet_raises_on_non_producer(self, state):
+        with pytest.raises(Exception):
+            compute_billet_conversion(state, "ERM")  # ERM does not produce billet
