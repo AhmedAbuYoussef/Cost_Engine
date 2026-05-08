@@ -127,7 +127,7 @@
         "argon_nm3":              1.9284,
         "handling_kg":            0.0,
         "cutting_kg":             0.0,
-        "_unit_note": "All `_kg`-suffixed prices are USD per kilogram of consumed material. Three entries (refractories, electrodes, other_fillers) were originally written at $/MT magnitudes (28.54, 5841.40, 233.46) and have been corrected to true $/kg by ÷1000. EAF aux_materials remains as-is — its $/kg value was already correct. Real Excel-sourced values should replace at next baseline refresh."
+        "_unit_note": "All `_kg`-suffixed prices are USD per kilogram of consumed material. Five entries (refractories, electrodes, other_fillers in EAF; aux_materials, refractories in BCCM) were originally entered in $/MT magnitude and have been normalized to $/kg here. Real Excel values at next refresh should follow the $/kg convention consistent with the key suffix."
       },
       "bccm_consumptions_per_ton_billet": {
         "byproduct_crops_pct_of_ms": -0.0026,
@@ -150,7 +150,7 @@
         "oxygen_nm3":         0.17,
         "nitrogen_nm3":       0.0,
         "argon_nm3":          1.9,
-        "_unit_note": "All `_kg`-suffixed prices are USD per kilogram of consumed material. Both entries (aux_materials, refractories) were originally written at $/MT magnitudes (559.9, 678.1) and have been corrected to true $/kg by ÷1000. Real Excel-sourced values should replace at next baseline refresh."
+        "_unit_note": "All `_kg`-suffixed prices are USD per kilogram of consumed material. Five entries (refractories, electrodes, other_fillers in EAF; aux_materials, refractories in BCCM) were originally entered in $/MT magnitude and have been normalized to $/kg here. Real Excel values at next refresh should follow the $/kg convention consistent with the key suffix."
       }
     },
     "EFS": {
