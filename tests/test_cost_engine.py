@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
-from cost_engine import compute_dri_conversion, compute_dri_detailed
+from cost_engine import (
+    _bccm_variable_cost_per_ton_billet,
+    _billet_material_price_summary,
+    _billet_yield_effect,
+    _eaf_byproduct_credit_per_ton_ms,
+    _eaf_conversion_cost_per_ton_ms,
+    _eaf_material_cost_per_ton_ms,
+    _eaf_variable_cost_per_ton_ms,
+    _intercompany_billet_price,
+    _resolve_dri_price_for_buyer,
+    compute_dri_conversion,
+    compute_dri_detailed,
+)
 
 
 # Tolerance helpers ----------------------------------------------------------
@@ -236,3 +248,87 @@ class TestStage1DRI_Conversion:
     def test_erm_currency_tag(self, state):
         out = compute_dri_conversion(state, "ERM")
         assert out["_currency"] == "USD"
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Billet helper smoke tests (Step 2a)
+# Wide tolerances — tight verification is Step 2b.
+# ---------------------------------------------------------------------------
+
+
+class TestStage2BilletHelpers:
+
+    def test_resolve_dri_price_ezdk(self, state):
+        price = _resolve_dri_price_for_buyer(state, "EZDK")
+        assert abs(price - 285.23) <= 0.5
+
+    def test_resolve_dri_price_efs(self, state):
+        price = _resolve_dri_price_for_buyer(state, "EFS")
+        assert abs(price - 307.94) <= 0.5
+
+    def test_resolve_dri_price_esr(self, state):
+        price = _resolve_dri_price_for_buyer(state, "ESR")
+        assert abs(price - 315.48) <= 0.5
+
+    def test_eaf_pipeline_ezdk(self, state):
+        b = state["billet"]["EZDK"]
+        prices = b["eaf_unit_prices_usd"]
+        cons = b["eaf_consumptions_per_ton_ms"]
+        eaf_yield = b["yields"]["eaf"]
+
+        dri_price = _resolve_dri_price_for_buyer(state, "EZDK")
+        material = _eaf_material_cost_per_ton_ms(
+            b["blending_pct"], prices, eaf_yield, dri_price
+        )
+        byproduct = _eaf_byproduct_credit_per_ton_ms(
+            cons["byproduct_pct_of_sc"], prices["byproduct_t"], eaf_yield
+        )
+        conversion = _eaf_conversion_cost_per_ton_ms(cons, prices)
+        ms_vc = _eaf_variable_cost_per_ton_ms(material, byproduct, conversion)
+
+        assert 300 < ms_vc < 500, (
+            f"EAF MS VC out of bounds: {ms_vc:.2f} (material={material:.2f}, "
+            f"byproduct={byproduct:.2f}, conversion={conversion:.2f})"
+        )
+
+    def test_bccm_pipeline_ezdk(self, state):
+        b = state["billet"]["EZDK"]
+        eaf_prices = b["eaf_unit_prices_usd"]
+        eaf_cons = b["eaf_consumptions_per_ton_ms"]
+        eaf_yield = b["yields"]["eaf"]
+        ccp_yield = b["yields"]["ccp"]
+
+        dri_price = _resolve_dri_price_for_buyer(state, "EZDK")
+        material = _eaf_material_cost_per_ton_ms(
+            b["blending_pct"], eaf_prices, eaf_yield, dri_price
+        )
+        byproduct = _eaf_byproduct_credit_per_ton_ms(
+            eaf_cons["byproduct_pct_of_sc"], eaf_prices["byproduct_t"], eaf_yield
+        )
+        conversion = _eaf_conversion_cost_per_ton_ms(eaf_cons, eaf_prices)
+        ms_vc = _eaf_variable_cost_per_ton_ms(material, byproduct, conversion)
+
+        billet_vc = _bccm_variable_cost_per_ton_billet(
+            ms_vc,
+            ccp_yield,
+            b["bccm_consumptions_per_ton_billet"],
+            b["bccm_unit_prices_usd"],
+        )
+        assert 350 < billet_vc < 550, f"Billet VC out of bounds: {billet_vc:.2f}"
+
+    def test_billet_material_summary_ezdk(self, state):
+        b = state["billet"]["EZDK"]
+        prices = b["eaf_unit_prices_usd"]
+        dri_price = _resolve_dri_price_for_buyer(state, "EZDK")
+        summary = _billet_material_price_summary(
+            b["blending_pct"], dri_price, prices["local_scrap_t"], prices["imported_scrap_t"]
+        )
+        assert abs(summary - 263.21) <= 0.5
+
+    def test_billet_yield_effect_realistic(self):
+        ye = _billet_yield_effect(263.21, 0.8599, 0.9877)
+        assert abs(ye - 46.70) <= 0.5
+
+    def test_intercompany_billet_price(self):
+        price = _intercompany_billet_price(409.52, 1.169)
+        assert abs(price - 478.7) <= 0.1

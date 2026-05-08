@@ -147,3 +147,167 @@ def compute_dri_conversion(state: dict, company: str) -> dict:
         "total_conversion": total_conversion,
         "total_variable_mfg": total_variable_mfg,
     }
+
+
+# ----------------------------------------------------------------------------
+# Stage 2 — Billet (Rulebook §4) — EAF + BCCM helpers, USD-native
+# ----------------------------------------------------------------------------
+
+
+def _resolve_dri_price_for_buyer(state: dict, buyer: str) -> float:
+    """Per Rulebook §4.5: which DRI VC ($/t) flows into the buyer's EAF.
+
+    EZDK consumes own DRI at own VC.
+    EFS  consumes ERM DRI at ERM VC (no margin).
+    ESR  consumes ERM DRI at ERM VC + intercompany margin.
+    """
+    if buyer == "EZDK":
+        return compute_dri_conversion(state, "EZDK")["total_variable_mfg"]
+    if buyer == "EFS":
+        return compute_dri_conversion(state, "ERM")["total_variable_mfg"]
+    if buyer == "ESR":
+        erm_vc = compute_dri_conversion(state, "ERM")["total_variable_mfg"]
+        margin = state["intercompany"]["dri_margin_usd_t"]["ERM_to_ESR"]
+        return erm_vc + margin
+    raise ValueError(f"Unknown billet buyer: {buyer}")
+
+
+def _eaf_material_cost_per_ton_ms(
+    blending_pct: dict,
+    unit_prices_usd: dict,
+    eaf_yield: float,
+    dri_price_usd: float,
+) -> float:
+    """Σ over DRI / LS / IS / HS / PI of (blend% / EAF yield) × price."""
+    dri = blending_pct.get("dri", 0.0)
+    ls = blending_pct.get("local_scrap", 0.0)
+    isc = blending_pct.get("imported_scrap", 0.0)
+    hs = blending_pct.get("home_scrap", 0.0)
+    pi = blending_pct.get("pig_iron", 0.0)
+
+    home_scrap_price = unit_prices_usd.get("home_scrap_t", 0.0)
+    pig_iron_price = unit_prices_usd.get("pig_iron_t", 0.0)
+
+    inv_yield = 1.0 / eaf_yield
+    return (
+        inv_yield * dri * dri_price_usd
+        + inv_yield * ls * unit_prices_usd["local_scrap_t"]
+        + inv_yield * isc * unit_prices_usd["imported_scrap_t"]
+        + inv_yield * hs * home_scrap_price
+        + inv_yield * pi * pig_iron_price
+    )
+
+
+def _eaf_byproduct_credit_per_ton_ms(
+    byproduct_pct_of_sc: float,
+    byproduct_price_usd: float,
+    eaf_yield: float,
+) -> float:
+    """(1/EAF yield) × byproduct% × price. byproduct% is negative in JSON."""
+    return (1.0 / eaf_yield) * byproduct_pct_of_sc * byproduct_price_usd
+
+
+def _eaf_conversion_cost_per_ton_ms(consumptions: dict, unit_prices_usd: dict) -> float:
+    """Σ consumption × unit price across all EAF conversion items.
+
+    Skips ``byproduct_pct_of_sc`` (handled via the byproduct credit helper).
+    Both electricity consumption keys (``electricity_eaf_lf_kwh`` and
+    ``electricity_aux_kwh``) multiply by the single ``electricity_kwh`` price.
+    """
+    aux_mats = consumptions.get("aux_materials_kg", 0.0) * unit_prices_usd.get("aux_materials_kg", 0.0)
+    refractories = consumptions.get("refractories_kg", 0.0) * unit_prices_usd.get("refractories_kg", 0.0)
+    electrodes = consumptions.get("electrodes_kg", 0.0) * unit_prices_usd.get("electrodes_kg", 0.0)
+    other_fillers = consumptions.get("other_fillers_kg", 0.0) * unit_prices_usd.get("other_fillers_kg", 0.0)
+
+    elec_price = unit_prices_usd.get("electricity_kwh", 0.0)
+    elec_eaf_lf = consumptions.get("electricity_eaf_lf_kwh", 0.0) * elec_price
+    elec_aux = consumptions.get("electricity_aux_kwh", 0.0) * elec_price
+
+    natural_gas = consumptions.get("natural_gas_nm3", 0.0) * unit_prices_usd.get("natural_gas_nm3", 0.0)
+    water = consumptions.get("water_m3", 0.0) * unit_prices_usd.get("water_m3", 0.0)
+    oxygen = consumptions.get("oxygen_nm3", 0.0) * unit_prices_usd.get("oxygen_nm3", 0.0)
+    nitrogen = consumptions.get("nitrogen_nm3", 0.0) * unit_prices_usd.get("nitrogen_nm3", 0.0)
+    argon = consumptions.get("argon_nm3", 0.0) * unit_prices_usd.get("argon_nm3", 0.0)
+    handling = consumptions.get("handling_kg", 0.0) * unit_prices_usd.get("handling_kg", 0.0)
+    cutting = consumptions.get("cutting_kg", 0.0) * unit_prices_usd.get("cutting_kg", 0.0)
+
+    return (
+        aux_mats
+        + refractories
+        + electrodes
+        + other_fillers
+        + elec_eaf_lf
+        + elec_aux
+        + natural_gas
+        + water
+        + oxygen
+        + nitrogen
+        + argon
+        + handling
+        + cutting
+    )
+
+
+def _eaf_variable_cost_per_ton_ms(material: float, byproduct: float, conversion: float) -> float:
+    return material + byproduct + conversion
+
+
+def _bccm_variable_cost_per_ton_billet(
+    ms_vc_per_ton: float,
+    ccp_yield: float,
+    bccm_consumptions: dict,
+    bccm_unit_prices_usd: dict,
+) -> float:
+    """Carry MS VC through CCP yield; add BCCM byproduct (crops) + conversion items."""
+    ms_carried = ms_vc_per_ton * (1.0 / ccp_yield)
+
+    crops_pct = bccm_consumptions.get("byproduct_crops_pct_of_ms", 0.0)
+    crops_price = bccm_unit_prices_usd.get("byproduct_crops_t", 0.0)
+    crops = crops_pct * crops_price
+
+    aux_mats = bccm_consumptions.get("aux_materials_kg", 0.0) * bccm_unit_prices_usd.get("aux_materials_kg", 0.0)
+    refractories = bccm_consumptions.get("refractories_kg", 0.0) * bccm_unit_prices_usd.get("refractories_kg", 0.0)
+    electricity = bccm_consumptions.get("electricity_kwh", 0.0) * bccm_unit_prices_usd.get("electricity_kwh", 0.0)
+    natural_gas = bccm_consumptions.get("natural_gas_nm3", 0.0) * bccm_unit_prices_usd.get("natural_gas_nm3", 0.0)
+    water = bccm_consumptions.get("water_m3", 0.0) * bccm_unit_prices_usd.get("water_m3", 0.0)
+    oxygen = bccm_consumptions.get("oxygen_nm3", 0.0) * bccm_unit_prices_usd.get("oxygen_nm3", 0.0)
+    nitrogen = bccm_consumptions.get("nitrogen_nm3", 0.0) * bccm_unit_prices_usd.get("nitrogen_nm3", 0.0)
+    argon = bccm_consumptions.get("argon_nm3", 0.0) * bccm_unit_prices_usd.get("argon_nm3", 0.0)
+
+    return (
+        ms_carried
+        + crops
+        + aux_mats
+        + refractories
+        + electricity
+        + natural_gas
+        + water
+        + oxygen
+        + nitrogen
+        + argon
+    )
+
+
+def _billet_material_price_summary(
+    blending_pct: dict,
+    dri_price: float,
+    local_scrap_price: float,
+    imported_scrap_price: float,
+) -> float:
+    """Rulebook §4.4: weighted average of input prices. No yield divide."""
+    return (
+        blending_pct.get("dri", 0.0) * dri_price
+        + blending_pct.get("local_scrap", 0.0) * local_scrap_price
+        + blending_pct.get("imported_scrap", 0.0) * imported_scrap_price
+    )
+
+
+def _billet_yield_effect(material_price: float, eaf_yield: float, ccp_yield: float) -> float:
+    """Material × (1 / (EAF × CCP) − 1)."""
+    combined = eaf_yield * ccp_yield
+    return material_price * ((1.0 / combined) - 1.0)
+
+
+def _intercompany_billet_price(seller_vc: float, seller_tradeoff_ratio: float) -> float:
+    """Rulebook §4.6: seller VC × seller trade-off ratio. (Used in step 3.)"""
+    return seller_vc * seller_tradeoff_ratio
