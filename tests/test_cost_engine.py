@@ -378,6 +378,43 @@ class TestStage2Billet_Conversion:
         out = compute_billet_detailed(state, "EZDK")
         assert out["_currency"] == "USD"
 
+    # Reconciliation-residual tests --------------------------------------
+
+    def test_ezdk_residual_value_frozen(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert out["_reconciliation_residual_usd_per_ton"] == 0.48
+
+    def test_ezdk_total_variable_mfg_computed(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert _usd_close(out["total_variable_mfg_computed"], 409.04)
+
+    def test_ezdk_total_equals_computed_plus_residual(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert (
+            out["total_variable_mfg"]
+            == out["total_variable_mfg_computed"]
+            + out["_reconciliation_residual_usd_per_ton"]
+        )
+
+    def test_ezdk_reconciliation_note_present(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        note = out.get("_reconciliation_note")
+        assert isinstance(note, str) and note
+        assert "§13" in note
+
+    def test_efs_no_residual(self, state):
+        rec = state.get("reconciliation", {}).get("billet", {}).get("EFS", {})
+        assert rec.get("residual_usd_per_ton", 0.0) == 0
+
+    def test_esr_no_residual(self, state):
+        rec = state.get("reconciliation", {}).get("billet", {}).get("ESR", {})
+        assert rec.get("residual_usd_per_ton", 0.0) == 0
+
+    def test_reconciliation_residual_only_for_ezdk_billet(self, state):
+        rec = state.get("reconciliation", {})
+        assert set(rec.keys()) == {"billet"}
+        assert set(rec["billet"].keys()) == {"EZDK"}
+
 
 # ---------------------------------------------------------------------------
 # Integrity check 2 — blending ratios sum (Step 2b)

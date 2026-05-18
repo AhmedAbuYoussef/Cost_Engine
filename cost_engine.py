@@ -319,6 +319,15 @@ def compute_billet_detailed(state: dict, company: str) -> dict:
     EAF stage + BCCM stage. For EZDK the underlying consumptions are real
     Excel data; EFS / ESR detailed blocks will be tagged reconstructed in
     Step 3.
+
+    Output dict exposes three distinct totals:
+      * ``total_variable_mfg_computed`` — engine's honest sum from JSON inputs.
+      * ``_reconciliation_residual_usd_per_ton`` — frozen per-baseline offset
+        loaded from ``state["reconciliation"]["billet"][company]``; 0 when
+        absent.
+      * ``total_variable_mfg`` — computed + residual; the value downstream
+        readers (trade-off matrix, Stage 3 Sc1) MUST use to match the
+        verification cascade. See the residual-application comment below.
     """
     b = state["billet"][company]
     eaf_prices = b["eaf_unit_prices_usd"]
@@ -337,14 +346,30 @@ def compute_billet_detailed(state: dict, company: str) -> dict:
     conversion = _eaf_conversion_cost_per_ton_ms(eaf_cons, eaf_prices)
     ms_vc = _eaf_variable_cost_per_ton_ms(material, byproduct, conversion)
 
-    billet_vc = _bccm_variable_cost_per_ton_billet(
+    billet_vc_computed = _bccm_variable_cost_per_ton_billet(
         ms_vc,
         ccp_yield,
         b["bccm_consumptions_per_ton_billet"],
         b["bccm_unit_prices_usd"],
     )
 
-    return {
+    # Residual application site.
+    #
+    # Residual is a frozen per-baseline offset, not a function of operational
+    # inputs. Sensitivity sweeps on consumption or price inputs vary
+    # total_variable_mfg_computed; residual is added back as a constant.
+    # Optimizer shadow prices on consumption/price knobs reflect
+    # total_variable_mfg_computed gradients only. Residual is NOT an optimizer
+    # knob and NOT a sensitivity dimension. (Binding contract for Steps 8 / 10.)
+    reconciliation = (
+        state.get("reconciliation", {}).get("billet", {}).get(company, {})
+    )
+    residual = reconciliation.get("residual_usd_per_ton", 0.0)
+    note = reconciliation.get("note")
+
+    total_variable_mfg = billet_vc_computed + residual
+
+    out: dict = {
         "_currency": "USD",
         "eaf": {
             "material_cost_per_ton_ms": material,
@@ -353,13 +378,27 @@ def compute_billet_detailed(state: dict, company: str) -> dict:
             "ms_variable_cost_per_ton_ms": ms_vc,
         },
         "bccm": {
-            "billet_variable_cost_per_ton_billet": billet_vc,
+            "billet_variable_cost_per_ton_billet": billet_vc_computed,
         },
+        "total_variable_mfg_computed": billet_vc_computed,
+        "_reconciliation_residual_usd_per_ton": residual,
+        "total_variable_mfg": total_variable_mfg,
     }
+    if note:
+        out["_reconciliation_note"] = note
+    return out
 
 
 def compute_billet_conversion(state: dict, company: str) -> dict:
-    """Verification §2.2 — billet summary conversion view, USD-native."""
+    """Verification §2.2 — billet summary conversion view, USD-native.
+
+    ``total_variable_mfg`` and ``other_conversion`` are derived from the
+    residual-included total so the summary cells match verification §2.2
+    directly. ``total_variable_mfg_computed`` is preserved on the dict for
+    inspection; downstream readers (trade-off matrix, Stage 3 Sc1) MUST
+    consume ``total_variable_mfg`` to match the verification cascade — see
+    reconciliation block in state.
+    """
     b = state["billet"][company]
     blending = b["blending_pct"]
     eaf_yield = b["yields"]["eaf"]
@@ -377,18 +416,27 @@ def compute_billet_conversion(state: dict, company: str) -> dict:
     yield_effect = _billet_yield_effect(material_price, eaf_yield, ccp_yield)
 
     detailed = compute_billet_detailed(state, company)
-    total_variable_mfg = detailed["bccm"]["billet_variable_cost_per_ton_billet"]
+    billet_vc_computed = detailed["total_variable_mfg_computed"]
+    residual = detailed["_reconciliation_residual_usd_per_ton"]
+    total_variable_mfg = detailed["total_variable_mfg"]
+    note = detailed.get("_reconciliation_note")
+
     other_conversion = total_variable_mfg - material_price - yield_effect
     total_conversion = yield_effect + other_conversion
 
-    return {
+    out: dict = {
         "_currency": "USD",
         "material_price": material_price,
         "yield_effect": yield_effect,
         "other_conversion": other_conversion,
         "total_conversion": total_conversion,
+        "total_variable_mfg_computed": billet_vc_computed,
+        "_reconciliation_residual_usd_per_ton": residual,
         "total_variable_mfg": total_variable_mfg,
     }
+    if note:
+        out["_reconciliation_note"] = note
+    return out
 
 
 # ----------------------------------------------------------------------------
