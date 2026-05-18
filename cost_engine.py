@@ -311,3 +311,130 @@ def _billet_yield_effect(material_price: float, eaf_yield: float, ccp_yield: flo
 def _intercompany_billet_price(seller_vc: float, seller_tradeoff_ratio: float) -> float:
     """Rulebook §4.6: seller VC × seller trade-off ratio. (Used in step 3.)"""
     return seller_vc * seller_tradeoff_ratio
+
+
+def compute_billet_detailed(state: dict, company: str) -> dict:
+    """Verification §2.x — billet detailed cost sheet, USD-native.
+
+    EAF stage + BCCM stage. For EZDK the underlying consumptions are real
+    Excel data; EFS / ESR detailed blocks will be tagged reconstructed in
+    Step 3.
+    """
+    b = state["billet"][company]
+    eaf_prices = b["eaf_unit_prices_usd"]
+    eaf_cons = b["eaf_consumptions_per_ton_ms"]
+    eaf_yield = b["yields"]["eaf"]
+    ccp_yield = b["yields"]["ccp"]
+
+    dri_price = _resolve_dri_price_for_buyer(state, company)
+
+    material = _eaf_material_cost_per_ton_ms(
+        b["blending_pct"], eaf_prices, eaf_yield, dri_price
+    )
+    byproduct = _eaf_byproduct_credit_per_ton_ms(
+        eaf_cons["byproduct_pct_of_sc"], eaf_prices["byproduct_t"], eaf_yield
+    )
+    conversion = _eaf_conversion_cost_per_ton_ms(eaf_cons, eaf_prices)
+    ms_vc = _eaf_variable_cost_per_ton_ms(material, byproduct, conversion)
+
+    billet_vc = _bccm_variable_cost_per_ton_billet(
+        ms_vc,
+        ccp_yield,
+        b["bccm_consumptions_per_ton_billet"],
+        b["bccm_unit_prices_usd"],
+    )
+
+    return {
+        "_currency": "USD",
+        "eaf": {
+            "material_cost_per_ton_ms": material,
+            "byproduct_credit_per_ton_ms": byproduct,
+            "conversion_cost_per_ton_ms": conversion,
+            "ms_variable_cost_per_ton_ms": ms_vc,
+        },
+        "bccm": {
+            "billet_variable_cost_per_ton_billet": billet_vc,
+        },
+    }
+
+
+def compute_billet_conversion(state: dict, company: str) -> dict:
+    """Verification §2.2 — billet summary conversion view, USD-native."""
+    b = state["billet"][company]
+    blending = b["blending_pct"]
+    eaf_yield = b["yields"]["eaf"]
+    ccp_yield = b["yields"]["ccp"]
+    eaf_prices = b["eaf_unit_prices_usd"]
+
+    dri_price = _resolve_dri_price_for_buyer(state, company)
+
+    material_price = _billet_material_price_summary(
+        blending,
+        dri_price,
+        eaf_prices["local_scrap_t"],
+        eaf_prices["imported_scrap_t"],
+    )
+    yield_effect = _billet_yield_effect(material_price, eaf_yield, ccp_yield)
+
+    detailed = compute_billet_detailed(state, company)
+    total_variable_mfg = detailed["bccm"]["billet_variable_cost_per_ton_billet"]
+    other_conversion = total_variable_mfg - material_price - yield_effect
+    total_conversion = yield_effect + other_conversion
+
+    return {
+        "_currency": "USD",
+        "material_price": material_price,
+        "yield_effect": yield_effect,
+        "other_conversion": other_conversion,
+        "total_conversion": total_conversion,
+        "total_variable_mfg": total_variable_mfg,
+    }
+
+
+# ----------------------------------------------------------------------------
+# Integrity check 2 — blending ratios per company per line sum to 1.0
+# ----------------------------------------------------------------------------
+
+
+def _blending_sum(blending: dict) -> float:
+    return (
+        blending.get("dri", 0.0)
+        + blending.get("local_scrap", 0.0)
+        + blending.get("imported_scrap", 0.0)
+        + blending.get("home_scrap", 0.0)
+        + blending.get("pig_iron", 0.0)
+    )
+
+
+def _check_blending_ratios_sum(state: dict) -> tuple[bool, str]:
+    """Per Rulebook §12 check 2: DRI + LS + IS + HS + PI ≈ 1.0 (±0.01).
+
+    Walks every company × production line that carries a ``blending_pct``
+    block: billet (EZDK / EFS / ESR) and HRC flat (EZDK / EFS).
+    """
+    tol = 0.01
+    failures: list[str] = []
+
+    for company, payload in state.get("billet", {}).items():
+        if not isinstance(payload, dict):
+            continue
+        blending = payload.get("blending_pct")
+        if blending is None:
+            continue
+        total = _blending_sum(blending)
+        if abs(total - 1.0) > tol:
+            failures.append(f"billet[{company}] sum={total:.4f}")
+
+    for company, payload in state.get("finished_products", {}).get("HRC", {}).items():
+        if not isinstance(payload, dict):
+            continue
+        blending = payload.get("blending_pct")
+        if blending is None:
+            continue
+        total = _blending_sum(blending)
+        if abs(total - 1.0) > tol:
+            failures.append(f"finished_products.HRC[{company}] sum={total:.4f}")
+
+    if failures:
+        return (False, "Blending ratios do not sum to 1.0 (±0.01): " + "; ".join(failures))
+    return (True, "All blending ratios sum to 1.0 (±0.01).")

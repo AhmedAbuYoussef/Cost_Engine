@@ -6,12 +6,15 @@ from cost_engine import (
     _bccm_variable_cost_per_ton_billet,
     _billet_material_price_summary,
     _billet_yield_effect,
+    _check_blending_ratios_sum,
     _eaf_byproduct_credit_per_ton_ms,
     _eaf_conversion_cost_per_ton_ms,
     _eaf_material_cost_per_ton_ms,
     _eaf_variable_cost_per_ton_ms,
     _intercompany_billet_price,
     _resolve_dri_price_for_buyer,
+    compute_billet_conversion,
+    compute_billet_detailed,
     compute_dri_conversion,
     compute_dri_detailed,
 )
@@ -332,3 +335,60 @@ class TestStage2BilletHelpers:
     def test_intercompany_billet_price(self):
         price = _intercompany_billet_price(409.52, 1.169)
         assert abs(price - 478.7) <= 0.1
+
+
+# ---------------------------------------------------------------------------
+# §2.2 — Billet Conversion-Cost View ($/t), EZDK only (Step 2b)
+# ---------------------------------------------------------------------------
+
+
+class TestStage2Billet_Conversion:
+
+    def test_ezdk_material_price(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert _usd_close(out["material_price"], 263.21)
+
+    def test_ezdk_yield_effect(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert _usd_close(out["yield_effect"], 46.70)
+
+    def test_ezdk_other_conversion(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert _usd_close(out["other_conversion"], 99.61)
+
+    def test_ezdk_total_conversion(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert _usd_close(out["total_conversion"], 146.31)
+
+    def test_ezdk_total_variable_mfg(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert _usd_close(out["total_variable_mfg"], 409.52)
+
+    def test_ezdk_currency_tag(self, state):
+        out = compute_billet_conversion(state, "EZDK")
+        assert out["_currency"] == "USD"
+
+    def test_ezdk_detailed_currency_tag(self, state):
+        out = compute_billet_detailed(state, "EZDK")
+        assert out["_currency"] == "USD"
+
+
+# ---------------------------------------------------------------------------
+# Integrity check 2 — blending ratios sum (Step 2b)
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrityChecks_HappyPath:
+
+    def test_check2_blending_ratios_sum(self, state):
+        passed, detail = _check_blending_ratios_sum(state)
+        assert passed, detail
+
+
+class TestIntegrityChecks_Violations:
+
+    def test_check2_blending_ratios_sum_fails(self, state_copy):
+        state_copy["billet"]["EZDK"]["blending_pct"]["dri"] = 0.65
+        passed, detail = _check_blending_ratios_sum(state_copy)
+        assert not passed
+        assert "EZDK" in detail
