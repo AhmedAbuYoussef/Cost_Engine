@@ -29,8 +29,14 @@ def _le_close(actual: float, target_int: int) -> bool:
 
 
 def _usd_close(actual: float, target_2dp: float) -> bool:
-    """USD/t to 2 dp: ±0.01 tolerance after rounding per brief §6."""
-    return abs(round(actual, 2) - target_2dp) <= 0.01
+    """USD/t to 2 dp: ±0.01 tolerance after rounding per brief §6.
+
+    The ``+ 1e-9`` epsilon absorbs IEEE-754 representation artifacts in the
+    boundary case (e.g., ``abs(round(263.2195, 2) - 263.21)`` evaluates to
+    ``0.010000000000019327``, not exactly ``0.01``). The mathematical
+    tolerance remains 0.01.
+    """
+    return abs(round(actual, 2) - target_2dp) <= 0.01 + 1e-9
 
 
 # ---------------------------------------------------------------------------
