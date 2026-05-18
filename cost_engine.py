@@ -20,6 +20,14 @@ class IntegrityError(Exception):
     """Raised when any of the six integrity checks fails."""
 
 
+class StructuralNonExistence(ValueError):
+    """Raised when a function is called on a company × stage combination that
+    does not physically exist (e.g., ERM has no own billet production). Maps
+    to ``error_code: structural_non_existence`` in the orchestrator response
+    shape (system prompt §5).
+    """
+
+
 # ----------------------------------------------------------------------------
 # Stage 1 — DRI (Rulebook §3)
 # ----------------------------------------------------------------------------
@@ -329,6 +337,14 @@ def compute_billet_detailed(state: dict, company: str) -> dict:
         readers (trade-off matrix, Stage 3 Sc1) MUST use to match the
         verification cascade. See the residual-application comment below.
     """
+    producers = state.get("entities", {}).get(
+        "billet_producers", ["EZDK", "EFS", "ESR"]
+    )
+    if company not in producers:
+        raise StructuralNonExistence(
+            f"compute_billet_detailed not callable for {company}: not a "
+            f"billet producer (producers: {producers})."
+        )
     b = state["billet"][company]
     eaf_prices = b["eaf_unit_prices_usd"]
     eaf_cons = b["eaf_consumptions_per_ton_ms"]
@@ -386,6 +402,8 @@ def compute_billet_detailed(state: dict, company: str) -> dict:
     }
     if note:
         out["_reconciliation_note"] = note
+    if b.get("_reconstructed_dummies"):
+        out["_reconstructed_dummies"] = True
     return out
 
 
@@ -399,6 +417,14 @@ def compute_billet_conversion(state: dict, company: str) -> dict:
     consume ``total_variable_mfg`` to match the verification cascade — see
     reconciliation block in state.
     """
+    producers = state.get("entities", {}).get(
+        "billet_producers", ["EZDK", "EFS", "ESR"]
+    )
+    if company not in producers:
+        raise StructuralNonExistence(
+            f"compute_billet_conversion not callable for {company}: not a "
+            f"billet producer (producers: {producers})."
+        )
     b = state["billet"][company]
     blending = b["blending_pct"]
     eaf_yield = b["yields"]["eaf"]
@@ -436,7 +462,76 @@ def compute_billet_conversion(state: dict, company: str) -> dict:
     }
     if note:
         out["_reconciliation_note"] = note
+    if b.get("_reconstructed_dummies"):
+        out["_reconstructed_dummies"] = True
     return out
+
+
+def _market_billet_price(state: dict) -> float:
+    """Rulebook §4.6 / Verification §2.4 — Base + Safe Guards + Other Costs."""
+    components = state["billet"]["market"]["components_usd_t"]
+    return (
+        components["base"]
+        + components["safe_guards"]
+        + components["other_costs"]
+    )
+
+
+def compute_tradeoff_matrix(state: dict) -> dict:
+    """Verification §2.3 — fully dynamic billet trade-off matrix, USD-native.
+
+    Source rows: producers (EZDK, EFS, ESR) plus Market. ERM never appears
+    as a source (it has no own production).
+    Buyer columns: EZDK, EFS, ERM, ESR.
+
+    Cell rule:
+      * Producer source row, off-diagonal cell: intercompany price =
+        seller's ``total_variable_mfg`` (residual-included) × seller's
+        ``trade_off_ratio``.
+      * Producer source row, diagonal cell (buyer == seller): seller's
+        own ``total_variable_mfg`` (no markup to self).
+      * Market source row: ``_market_billet_price(state)`` for every
+        buyer.
+
+    Per-buyer minimum: MIN across all source rows.
+
+    Reads ``total_variable_mfg`` (residual-included) from
+    ``compute_billet_conversion``, NOT ``total_variable_mfg_computed``.
+    This is what makes EZDK source intercompany price land at 478.73
+    (= 409.52 × 1.169) rather than 478.16 (= 409.04 × 1.169).
+
+    This is a view function — it is never called during default P&L
+    generation and is not persisted.
+    """
+    buyers = ["EZDK", "EFS", "ERM", "ESR"]
+    producers = ["EZDK", "EFS", "ESR"]
+
+    sources: dict = {}
+    for producer in producers:
+        bc = compute_billet_conversion(state, producer)
+        own_vc = bc["total_variable_mfg"]  # residual-included; matches §2.3
+        ratio = state["billet"][producer]["trade_off_ratio"]
+        intercompany_price = _intercompany_billet_price(own_vc, ratio)
+        row = {"price": intercompany_price}
+        for buyer in buyers:
+            row["to_" + buyer] = own_vc if buyer == producer else intercompany_price
+        sources[producer] = row
+
+    market_price = _market_billet_price(state)
+    market_row: dict = {"price": market_price}
+    for buyer in buyers:
+        market_row["to_" + buyer] = market_price
+    sources["Market"] = market_row
+
+    minimum = {
+        buyer: min(sources[s]["to_" + buyer] for s in sources) for buyer in buyers
+    }
+
+    return {
+        "_currency": "USD",
+        "sources": sources,
+        "minimum": minimum,
+    }
 
 
 # ----------------------------------------------------------------------------

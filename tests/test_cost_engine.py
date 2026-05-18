@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cost_engine import (
+    StructuralNonExistence,
     _bccm_variable_cost_per_ton_billet,
     _billet_material_price_summary,
     _billet_yield_effect,
@@ -12,11 +15,13 @@ from cost_engine import (
     _eaf_material_cost_per_ton_ms,
     _eaf_variable_cost_per_ton_ms,
     _intercompany_billet_price,
+    _market_billet_price,
     _resolve_dri_price_for_buyer,
     compute_billet_conversion,
     compute_billet_detailed,
     compute_dri_conversion,
     compute_dri_detailed,
+    compute_tradeoff_matrix,
 )
 
 
@@ -402,18 +407,218 @@ class TestStage2Billet_Conversion:
         assert isinstance(note, str) and note
         assert "§13" in note
 
-    def test_efs_no_residual(self, state):
-        rec = state.get("reconciliation", {}).get("billet", {}).get("EFS", {})
-        assert rec.get("residual_usd_per_ton", 0.0) == 0
-
-    def test_esr_no_residual(self, state):
-        rec = state.get("reconciliation", {}).get("billet", {}).get("ESR", {})
-        assert rec.get("residual_usd_per_ton", 0.0) == 0
-
     def test_reconciliation_residual_only_for_ezdk_billet(self, state):
         rec = state.get("reconciliation", {})
         assert set(rec.keys()) == {"billet"}
         assert set(rec["billet"].keys()) == {"EZDK"}
+
+    # EFS rows (verification §2.2) ---------------------------------------
+
+    def test_efs_material_price(self, state):
+        out = compute_billet_conversion(state, "EFS")
+        assert _usd_close(out["material_price"], 299.98)
+
+    def test_efs_yield_effect(self, state):
+        out = compute_billet_conversion(state, "EFS")
+        assert _usd_close(out["yield_effect"], 60.72)
+
+    def test_efs_other_conversion(self, state):
+        out = compute_billet_conversion(state, "EFS")
+        assert _usd_close(out["other_conversion"], 107.26)
+
+    def test_efs_total_variable_mfg(self, state):
+        out = compute_billet_conversion(state, "EFS")
+        assert _usd_close(out["total_variable_mfg"], 467.96)
+
+    def test_efs_no_residual(self, state):
+        out = compute_billet_conversion(state, "EFS")
+        assert out["_reconciliation_residual_usd_per_ton"] == 0
+
+    def test_efs_reconstructed_dummies_flag(self, state):
+        assert state["billet"]["EFS"]["_reconstructed_dummies"] is True
+        out = compute_billet_conversion(state, "EFS")
+        assert out.get("_reconstructed_dummies") is True
+
+    # ESR rows (verification §2.2) ---------------------------------------
+
+    def test_esr_material_price(self, state):
+        out = compute_billet_conversion(state, "ESR")
+        assert _usd_close(out["material_price"], 303.15)
+
+    def test_esr_yield_effect(self, state):
+        out = compute_billet_conversion(state, "ESR")
+        assert _usd_close(out["yield_effect"], 49.19)
+
+    def test_esr_other_conversion(self, state):
+        out = compute_billet_conversion(state, "ESR")
+        assert _usd_close(out["other_conversion"], 97.97)
+
+    def test_esr_total_variable_mfg(self, state):
+        out = compute_billet_conversion(state, "ESR")
+        assert _usd_close(out["total_variable_mfg"], 450.31)
+
+    def test_esr_no_residual(self, state):
+        out = compute_billet_conversion(state, "ESR")
+        assert out["_reconciliation_residual_usd_per_ton"] == 0
+
+    def test_esr_reconstructed_dummies_flag(self, state):
+        assert state["billet"]["ESR"]["_reconstructed_dummies"] is True
+        out = compute_billet_conversion(state, "ESR")
+        assert out.get("_reconstructed_dummies") is True
+
+    # ERM does not produce billet ----------------------------------------
+
+    def test_erm_billet_conversion_raises(self, state):
+        with pytest.raises(StructuralNonExistence):
+            compute_billet_conversion(state, "ERM")
+
+
+# ---------------------------------------------------------------------------
+# Market Billet Build-up (verification §2.4)
+# ---------------------------------------------------------------------------
+
+
+class TestStage2MarketBilletBuildup:
+
+    def test_market_base(self, state):
+        assert state["billet"]["market"]["components_usd_t"]["base"] == 428
+
+    def test_market_safe_guards(self, state):
+        assert state["billet"]["market"]["components_usd_t"]["safe_guards"] == 74
+
+    def test_market_other_costs(self, state):
+        assert state["billet"]["market"]["components_usd_t"]["other_costs"] == 88
+
+    def test_market_total(self, state):
+        assert _market_billet_price(state) == 590
+
+
+# ---------------------------------------------------------------------------
+# Trade-off Matrix (verification §2.3)
+# ---------------------------------------------------------------------------
+
+
+class TestStage2TradeoffMatrix:
+
+    # Source-own intercompany sell prices (the "Price" column) ----------
+
+    def test_ezdk_intercompany_price(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EZDK"]["price"], 478.73)
+
+    def test_efs_intercompany_price(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EFS"]["price"], 475.45)
+
+    def test_esr_intercompany_price(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["ESR"]["price"], 457.97)
+
+    def test_market_intercompany_price(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["Market"]["price"], 590.00)
+
+    # 16 source × buyer cells -------------------------------------------
+
+    def test_ezdk_to_ezdk(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EZDK"]["to_EZDK"], 409.52)
+
+    def test_ezdk_to_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EZDK"]["to_EFS"], 478.73)
+
+    def test_ezdk_to_erm(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EZDK"]["to_ERM"], 478.73)
+
+    def test_ezdk_to_esr(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EZDK"]["to_ESR"], 478.73)
+
+    def test_efs_to_ezdk(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EFS"]["to_EZDK"], 475.45)
+
+    def test_efs_to_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EFS"]["to_EFS"], 467.96)
+
+    def test_efs_to_erm(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EFS"]["to_ERM"], 475.45)
+
+    def test_efs_to_esr(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["EFS"]["to_ESR"], 475.45)
+
+    def test_esr_to_ezdk(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["ESR"]["to_EZDK"], 457.97)
+
+    def test_esr_to_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["ESR"]["to_EFS"], 457.97)
+
+    def test_esr_to_erm(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["ESR"]["to_ERM"], 457.97)
+
+    def test_esr_to_esr(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["ESR"]["to_ESR"], 450.31)
+
+    def test_market_to_ezdk(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["Market"]["to_EZDK"], 590.00)
+
+    def test_market_to_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["Market"]["to_EFS"], 590.00)
+
+    def test_market_to_erm(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["Market"]["to_ERM"], 590.00)
+
+    def test_market_to_esr(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["sources"]["Market"]["to_ESR"], 590.00)
+
+    # Per-buyer minimums ------------------------------------------------
+
+    def test_min_to_ezdk(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["minimum"]["EZDK"], 409.52)
+
+    def test_min_to_efs(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["minimum"]["EFS"], 457.97)
+
+    def test_min_to_erm(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["minimum"]["ERM"], 457.97)
+
+    def test_min_to_esr(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert _usd_close(m["minimum"]["ESR"], 450.31)
+
+    # Structural assertions ---------------------------------------------
+
+    def test_matrix_no_erm_source_row(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert "ERM" not in m["sources"]
+
+    def test_matrix_currency_tag(self, state):
+        m = compute_tradeoff_matrix(state)
+        assert m["_currency"] == "USD"
+
+    def test_matrix_uses_residual_included_billet_vc(self, state):
+        m = compute_tradeoff_matrix(state)
+        # Derive seller VC back from the intercompany price.
+        derived_vc = m["sources"]["EZDK"]["price"] / 1.169
+        # Should match residual-included 409.52, not computed-only 409.04.
+        assert abs(derived_vc - 409.52) <= 0.01
+        assert abs(derived_vc - 409.04) > 0.4
 
 
 # ---------------------------------------------------------------------------
