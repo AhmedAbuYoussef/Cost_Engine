@@ -160,6 +160,25 @@ _BILLET_PRODUCERS = ("EZDK", "EFS", "ESR")
 _ALL_COMPANIES = ("EZDK", "EFS", "ERM", "ESR")
 
 
+def _billet_reconciliation_residual_usd_t(state: dict, company: str) -> float:
+    """Structural Excel-to-engine reconciliation residual at the Other Conversion line.
+
+    Closes a per-company gap that cannot be eliminated without modifying the
+    JSON's reconstructed-dummy class of inputs. Currently populated for EZDK
+    only (step 2 adjudication). Other companies default to 0.0; their own
+    residuals (if needed) will be adjudicated and added in step 3.
+
+    Source: state["reconciliation"]["billet_<COMPANY>_excel_to_engine_usd_t"].
+    The reconciliation block is seeded in tests/conftest.py per-fixture, not
+    written into model_initial_state.json (step_manager.py / SQLite persistence
+    is the eventual home — see brief §11 forward log).
+    """
+    if company != "EZDK":
+        return 0.0
+    rec = state.get("reconciliation", {})
+    return float(rec.get("billet_EZDK_excel_to_engine_usd_t", 0.0))
+
+
 def _require_billet_producer(company: str) -> None:
     if company not in _BILLET_PRODUCERS:
         raise ValueError(
@@ -329,6 +348,10 @@ def compute_billet_detailed(state: dict, company: str) -> dict:
     EFS/ESR detailed inputs are dummies; this function will compute on them
     when they're populated in step 3, but the test suite asserts the summary
     only for EFS/ESR.
+
+    The reconciliation residual (currently EZDK-only) is added on top of the
+    engineering buildup. `total_pre_residual_usd_t` exposes the pure buildup;
+    `total_variable_mfg_usd_t` is the residual-included headline.
     """
     _require_billet_producer(company)
     b = state["billet"][company]
@@ -345,15 +368,19 @@ def compute_billet_detailed(state: dict, company: str) -> dict:
         b["bccm_consumptions_per_ton_billet"],
         b["bccm_unit_prices_usd"],
     )
-    out = {
+    total_pre_residual = bccm["total_usd_t_billet"]
+    residual = _billet_reconciliation_residual_usd_t(state, company)
+    total_with_residual = total_pre_residual + residual
+    return {
         "_currency": "USD",
         "company": company,
         "dri_price_used_usd_t": dri_price,
         "eaf": eaf,
         "bccm": bccm,
-        "total_variable_mfg_usd_t": bccm["total_usd_t_billet"],
+        "total_pre_residual_usd_t": total_pre_residual,
+        "reconciliation_residual_usd_t": residual,
+        "total_variable_mfg_usd_t": total_with_residual,
     }
-    return out
 
 
 def _billet_material_price_summary(blending_pct: dict, prices: dict) -> float:
@@ -370,7 +397,13 @@ def _billet_yield_effect(material_price_usd: float, combined_yield: float) -> fl
 
 
 def compute_billet_conversion(state: dict, company: str) -> dict:
-    """Verification §2.2 — billet conversion-cost view (USD/t)."""
+    """Verification §2.2 — billet conversion-cost view (USD/t).
+
+    Per step 2 adjudication, the reconciliation residual is added to Other
+    Conversion. Total Conversion = Yield Effect + Other Conversion (residual
+    included); Total Variable Mfg = Material + Total Conversion. The residual
+    is fully transparent in the returned dict.
+    """
     _require_billet_producer(company)
     b = state["billet"][company]
     dri_price = _resolve_dri_price_for_buyer(state, company)
@@ -382,18 +415,27 @@ def compute_billet_conversion(state: dict, company: str) -> dict:
     material = _billet_material_price_summary(b["blending_pct"], prices)
     combined_yield = b["yields"]["eaf"] * b["yields"]["ccp"]
     yield_effect = _billet_yield_effect(material, combined_yield)
+
     detailed = compute_billet_detailed(state, company)
-    total_vc = detailed["total_variable_mfg_usd_t"]
-    other_conversion = total_vc - material - yield_effect
-    total_conversion = yield_effect + other_conversion
+    total_pre_residual = detailed["total_pre_residual_usd_t"]
+    residual = detailed["reconciliation_residual_usd_t"]
+
+    _other_conversion_before_residual = total_pre_residual - material - yield_effect
+    _other_conversion_with_residual = _other_conversion_before_residual + residual
+
+    total_conversion = yield_effect + _other_conversion_with_residual
+    total_vc = material + total_conversion  # == total_pre_residual + residual
+
     return {
         "_currency": "USD",
         "company": company,
         "material_price_usd_t": material,
         "yield_effect_usd_t": yield_effect,
-        "other_conversion_usd_t": other_conversion,
+        "other_conversion_usd_t": _other_conversion_with_residual,
         "total_conversion_usd_t": total_conversion,
         "total_variable_mfg_usd_t": total_vc,
+        "_other_conversion_before_residual": _other_conversion_before_residual,
+        "_reconciliation_residual_usd_t": residual,
         "_combined_yield": combined_yield,
         "_dri_price_used": dri_price,
     }

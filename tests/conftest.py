@@ -29,4 +29,15 @@ def _baseline_state():
 
 @pytest.fixture
 def state(_baseline_state):
-    return copy.deepcopy(_baseline_state)
+    """Per-test deep copy with the reconciliation residual block seeded.
+
+    The reconciliation block lives outside model_initial_state.json per brief
+    §11 forward log; it will be persisted by state_manager.py (SQLite) in a
+    later step. Seeding here keeps the JSON pristine while letting the engine
+    pick up the structural Excel-to-engine residual that closes Other
+    Conversion for EZDK billet (step 2 adjudication; see TESTING_NOTES.md).
+    """
+    s = copy.deepcopy(_baseline_state)
+    s.setdefault("reconciliation", {})
+    s["reconciliation"]["billet_EZDK_excel_to_engine_usd_t"] = 0.499
+    return s
