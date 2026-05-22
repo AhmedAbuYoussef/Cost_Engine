@@ -396,16 +396,57 @@ def _billet_yield_effect(material_price_usd: float, combined_yield: float) -> fl
     return material_price_usd * (1.0 / combined_yield - 1.0)
 
 
+_BILLET_MODE_DETAILED_WITH_RESIDUAL = "detailed_with_residual"
+_BILLET_MODE_SUMMARY_FITTED = "summary_fitted"
+
+
+def _billet_mode_for_company(state: dict, company: str) -> str:
+    """Dispatch the billet computation path based on available state.
+
+    - "detailed_with_residual": company has full EAF+BCCM consumptions
+      (EZDK). Engineering buildup + reconciliation residual at Other Conv.
+    - "summary_fitted": company has only yields, blending, and a seeded
+      `summary_other_conversion_usd_per_ton` value (EFS, ESR pilot dummies).
+      Direct §4.4 summary path; no residual.
+
+    When real Excel data later replaces the EFS/ESR seeds with detailed
+    consumptions, this function will pick up the detailed path automatically.
+    """
+    b = state["billet"][company]
+    if "eaf_consumptions_per_ton_ms" in b:
+        return _BILLET_MODE_DETAILED_WITH_RESIDUAL
+    if "summary_other_conversion_usd_per_ton" in b:
+        return _BILLET_MODE_SUMMARY_FITTED
+    raise ValueError(
+        f"structural_non_existence: no billet inputs available for {company} "
+        f"(neither detailed EAF/BCCM consumptions nor a summary "
+        f"other_conversion seed)."
+    )
+
+
 def compute_billet_conversion(state: dict, company: str) -> dict:
     """Verification §2.2 — billet conversion-cost view (USD/t).
 
-    Per step 2 adjudication, the reconciliation residual is added to Other
-    Conversion. Total Conversion = Yield Effect + Other Conversion (residual
-    included); Total Variable Mfg = Material + Total Conversion. The residual
-    is fully transparent in the returned dict.
+    Dispatch on `_billet_mode_for_company`:
+
+    - DETAILED_WITH_RESIDUAL (EZDK): full EAF+BCCM buildup via
+      `compute_billet_detailed`, then the reconciliation residual is added
+      to Other Conversion. Total Conversion = Yield Effect + Other Conv
+      (residual included); Total Variable Mfg = Material + Total Conv.
+
+    - SUMMARY_FITTED (EFS, ESR pilot dummies): direct §4.4 summary. Other
+      Conversion is read from state as a seeded scalar; no residual is
+      applied (the seed is itself the fit to the verification target).
+      Total Conversion = Yield Effect + Other Conv; Total VC = Material +
+      Total Conv.
+
+    The residual fields are present in the returned dict for both modes,
+    set to 0.0 in summary mode for caller transparency.
     """
     _require_billet_producer(company)
     b = state["billet"][company]
+    mode = _billet_mode_for_company(state, company)
+
     dri_price = _resolve_dri_price_for_buyer(state, company)
     prices = {
         "dri": dri_price,
@@ -416,19 +457,24 @@ def compute_billet_conversion(state: dict, company: str) -> dict:
     combined_yield = b["yields"]["eaf"] * b["yields"]["ccp"]
     yield_effect = _billet_yield_effect(material, combined_yield)
 
-    detailed = compute_billet_detailed(state, company)
-    total_pre_residual = detailed["total_pre_residual_usd_t"]
-    residual = detailed["reconciliation_residual_usd_t"]
-
-    _other_conversion_before_residual = total_pre_residual - material - yield_effect
-    _other_conversion_with_residual = _other_conversion_before_residual + residual
+    if mode == _BILLET_MODE_DETAILED_WITH_RESIDUAL:
+        detailed = compute_billet_detailed(state, company)
+        total_pre_residual = detailed["total_pre_residual_usd_t"]
+        residual = detailed["reconciliation_residual_usd_t"]
+        _other_conversion_before_residual = total_pre_residual - material - yield_effect
+        _other_conversion_with_residual = _other_conversion_before_residual + residual
+    else:  # SUMMARY_FITTED
+        _other_conversion_before_residual = b["summary_other_conversion_usd_per_ton"]
+        residual = 0.0
+        _other_conversion_with_residual = _other_conversion_before_residual + residual
 
     total_conversion = yield_effect + _other_conversion_with_residual
-    total_vc = material + total_conversion  # == total_pre_residual + residual
+    total_vc = material + total_conversion
 
     return {
         "_currency": "USD",
         "company": company,
+        "billet_mode": mode,
         "material_price_usd_t": material,
         "yield_effect_usd_t": yield_effect,
         "other_conversion_usd_t": _other_conversion_with_residual,
@@ -456,73 +502,71 @@ def _market_billet_price(state: dict) -> float:
 _TRADEOFF_NOT_YET_BUILT = "not_yet_built"
 
 
-def compute_tradeoff_matrix(state: dict) -> dict:
-    """Rulebook §4.6 trade-off matrix — framework.
+def _producer_source_row(state: dict, source: str, buyers: tuple) -> dict:
+    """Build one producer source row: own VC, ratio, offer, per-buyer prices.
 
-    Source rows: EZDK (implemented), EFS (sentinel — step 3), ESR (sentinel — step 3),
-    Market (implemented). Buyer columns: EZDK, EFS, ERM, ESR.
-    Minimum-per-buyer is computed across the *implemented* source rows only;
-    sentinel rows are excluded from the minimum.
+    For source==buyer (producer to itself), the row shows own VC, not the
+    ratio'd offer (Rulebook §4.5 producer-own-VC rule).
     """
-    buyers = list(_ALL_COMPANIES)
-    sources = ["EZDK", "EFS", "ESR", "Market"]
+    vc = compute_billet_conversion(state, source)["total_variable_mfg_usd_t"]
+    ratio = state["billet"][source]["trade_off_ratio"]
+    offer = _intercompany_billet_price(vc, ratio)
+    row = {
+        "seller_vc_usd_t": vc,
+        "trade_off_ratio": ratio,
+        "offer_usd_t": offer,
+    }
+    for buyer in buyers:
+        if buyer == source:
+            row[f"to_{buyer}"] = vc
+        else:
+            row[f"to_{buyer}"] = offer
+    return row
+
+
+def compute_tradeoff_matrix(state: dict) -> dict:
+    """Rulebook §4.6 trade-off matrix.
+
+    Source rows: EZDK, EFS, ESR (producers), and Market (flat 590).
+    Buyer columns: EZDK, EFS, ERM, ESR. ERM is buyer-only — never a source,
+    per Rulebook §1.4.
+
+    Source==buyer cells use the producer-own-VC rule. Source!=buyer cells use
+    seller_vc × seller_tradeoff_ratio. Market is flat across buyers.
+
+    `minimum_per_buyer` is MIN across the column, including own-VC cells when
+    present. For ERM (no own VC), the minimum is over all source rows'
+    intercompany offers + market.
+    """
+    buyers = _ALL_COMPANIES
+    producer_sources = ("EZDK", "EFS", "ESR")
+    sources = list(producer_sources) + ["Market"]
 
     rows: dict = {}
+    for src in producer_sources:
+        rows[src] = _producer_source_row(state, src, buyers)
 
-    # EZDK source row.
-    ezdk_vc = compute_billet_conversion(state, "EZDK")["total_variable_mfg_usd_t"]
-    ezdk_ratio = state["billet"]["EZDK"]["trade_off_ratio"]
-    ezdk_offer = _intercompany_billet_price(ezdk_vc, ezdk_ratio)
-    rows["EZDK"] = {
-        "seller_vc_usd_t": ezdk_vc,
-        "trade_off_ratio": ezdk_ratio,
-        "offer_usd_t": ezdk_offer,
-        # To EZDK itself, the buyer uses own VC, not the offer (Rulebook §4.5 producer rule).
-        "to_EZDK": ezdk_vc,
-        "to_EFS":  ezdk_offer,
-        "to_ERM":  ezdk_offer,
-        "to_ESR":  ezdk_offer,
-    }
-
-    # EFS source row — stub (step 3 will fill).
-    rows["EFS"] = {
-        "status": _TRADEOFF_NOT_YET_BUILT,
-        "trade_off_ratio": state["billet"]["EFS"]["trade_off_ratio"],
-    }
-
-    # ESR source row — stub (step 3 will fill).
-    rows["ESR"] = {
-        "status": _TRADEOFF_NOT_YET_BUILT,
-        "trade_off_ratio": state["billet"]["ESR"]["trade_off_ratio"],
-    }
-
-    # Market source row — flat price across buyers.
     market = _market_billet_price(state)
-    rows["Market"] = {
-        "price_usd_t": market,
-        "to_EZDK": market,
-        "to_EFS":  market,
-        "to_ERM":  market,
-        "to_ESR":  market,
-    }
-
-    # Minimum per buyer across the *implemented* source rows only.
-    minima: dict = {}
+    market_row = {"price_usd_t": market}
     for buyer in buyers:
-        candidates = []
-        for src in sources:
-            row = rows[src]
-            if row.get("status") == _TRADEOFF_NOT_YET_BUILT:
-                continue
-            candidates.append(row[f"to_{buyer}"])
-        minima[buyer] = min(candidates) if candidates else None
+        market_row[f"to_{buyer}"] = market
+    rows["Market"] = market_row
+
+    minima: dict = {}
+    minima_source: dict = {}
+    for buyer in buyers:
+        column = {src: rows[src][f"to_{buyer}"] for src in sources}
+        winning_src = min(column, key=column.get)
+        minima[buyer] = column[winning_src]
+        minima_source[buyer] = winning_src
 
     return {
         "_currency": "USD",
         "sources": sources,
-        "buyers": buyers,
+        "buyers": list(buyers),
         "rows": rows,
         "minimum_per_buyer": minima,
+        "minimum_per_buyer_source": minima_source,
         "market_price_usd_t": market,
     }
 

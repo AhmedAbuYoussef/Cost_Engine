@@ -37,6 +37,12 @@ _USD_TOL_OVERRIDES = {
     ("billet_conversion", "EZDK", "total_variable_mfg_usd_t"):   0.05,
     # Step 2 — Trade-off matrix EZDK source row propagation (×1.169).
     ("tradeoff_matrix",   "EZDK", "offer_usd_t"):                0.06,
+    # Step 3 — Billet EFS ERM-DRI-VC propagation (no residual, pure propagation).
+    ("billet_conversion", "EFS", "material_price_usd_t"):        0.05,
+    ("billet_conversion", "EFS", "total_variable_mfg_usd_t"):    0.06,
+    # Step 3 — Trade-off matrix EFS source row propagation (×1.016).
+    ("tradeoff_matrix",   "EFS", "offer_usd_t"):                 0.07,
+    # ESR uses default ±0.01 everywhere (its propagation is small enough).
 }
 
 
@@ -334,40 +340,141 @@ class TestStage2BilletEZDK_Detailed:
 # Stage 2 — Trade-off Matrix Framework (verification §2.3, EZDK + Market only)
 # ---------------------------------------------------------------------------
 
-class TestStage2TradeoffMatrix_Framework:
-    """EZDK source row implemented; EFS/ESR sentinel-stubbed for step 3.
+class TestStage2BilletEFS_Summary:
+    """Verification §2.2 EFS column — five summary cells via summary_fitted mode.
 
-    Verifies the framework computes EZDK × 1.169, Market = 590, and
-    minimum-per-buyer correctly across the implemented rows.
+    No reconciliation residual (the seeded summary_other_conversion IS the fit).
+    Drift on Material Price and Total VC is pure ERM-DRI-VC propagation,
+    handled by per-cell ±0.05/±0.06 overrides.
+    """
+
+    EXPECTED = {
+        "material_price_usd_t":      299.98,
+        "yield_effect_usd_t":         60.72,
+        "other_conversion_usd_t":    107.26,
+        "total_conversion_usd_t":    167.98,
+        "total_variable_mfg_usd_t":  467.96,
+    }
+
+    def test_currency_tag_is_usd(self, state):
+        out = ce.compute_billet_conversion(state, "EFS")
+        assert out["_currency"] == "USD"
+
+    def test_billet_mode_is_summary_fitted(self, state):
+        out = ce.compute_billet_conversion(state, "EFS")
+        assert out["billet_mode"] == ce._BILLET_MODE_SUMMARY_FITTED
+
+    def test_no_residual_applied(self, state):
+        out = ce.compute_billet_conversion(state, "EFS")
+        assert out["_reconciliation_residual_usd_t"] == 0.0
+
+    def test_dri_price_uses_erm_vc_no_margin(self, state):
+        out = ce.compute_billet_conversion(state, "EFS")
+        erm_dri = ce.compute_dri_conversion(state, "ERM")["total_variable_mfg_usd_t"]
+        # ERM_to_EFS margin is 0.00 per state["intercompany"].
+        assert out["_dri_price_used"] == pytest.approx(erm_dri, abs=1e-9)
+
+    def test_cells_within_usd_tolerance(self, state):
+        out = ce.compute_billet_conversion(state, "EFS")
+        failures = []
+        for cell, target in self.EXPECTED.items():
+            tol = _tol_for("billet_conversion", "EFS", cell)
+            if not _usd_close(out[cell], target, tol):
+                failures.append(
+                    f"EFS billet {cell}: engine={out[cell]:.6f} "
+                    f"(rounded {round(out[cell], 2):.2f}), target={target}, "
+                    f"diff={round(out[cell], 2) - target:+.4f}, tol=±{tol}"
+                )
+        assert not failures, "\n".join(failures)
+
+
+class TestStage2BilletESR_Summary:
+    """Verification §2.2 ESR column — same structure as EFS, all cells at ±0.01.
+
+    ESR's blend weights (DRI 20%, scraps 80%) make the ERM-DRI-VC propagation
+    drift small enough to land everywhere within ±0.01.
+    """
+
+    EXPECTED = {
+        "material_price_usd_t":      303.15,
+        "yield_effect_usd_t":         49.19,
+        "other_conversion_usd_t":     97.97,
+        "total_conversion_usd_t":    147.16,
+        "total_variable_mfg_usd_t":  450.31,
+    }
+
+    def test_currency_tag_is_usd(self, state):
+        out = ce.compute_billet_conversion(state, "ESR")
+        assert out["_currency"] == "USD"
+
+    def test_billet_mode_is_summary_fitted(self, state):
+        out = ce.compute_billet_conversion(state, "ESR")
+        assert out["billet_mode"] == ce._BILLET_MODE_SUMMARY_FITTED
+
+    def test_no_residual_applied(self, state):
+        out = ce.compute_billet_conversion(state, "ESR")
+        assert out["_reconciliation_residual_usd_t"] == 0.0
+
+    def test_dri_price_uses_erm_vc_plus_margin(self, state):
+        out = ce.compute_billet_conversion(state, "ESR")
+        erm_dri = ce.compute_dri_conversion(state, "ERM")["total_variable_mfg_usd_t"]
+        margin = state["intercompany"]["dri_margin_usd_t"]["ERM_to_ESR"]
+        # Rulebook §4.5: ESR uses ERM DRI VC + margin (no hardcode of 7.54).
+        assert out["_dri_price_used"] == pytest.approx(erm_dri + margin, abs=1e-9)
+
+    def test_cells_within_usd_tolerance(self, state):
+        out = ce.compute_billet_conversion(state, "ESR")
+        failures = []
+        for cell, target in self.EXPECTED.items():
+            tol = _tol_for("billet_conversion", "ESR", cell)
+            if not _usd_close(out[cell], target, tol):
+                failures.append(
+                    f"ESR billet {cell}: engine={out[cell]:.6f} "
+                    f"(rounded {round(out[cell], 2):.2f}), target={target}, "
+                    f"diff={round(out[cell], 2) - target:+.4f}, tol=±{tol}"
+                )
+        assert not failures, "\n".join(failures)
+
+
+class TestSc2Dispatch_BilletMode:
+    """Verify state-driven billet_mode dispatch across companies."""
+
+    def test_ezdk_uses_detailed_with_residual(self, state):
+        out = ce.compute_billet_conversion(state, "EZDK")
+        assert out["billet_mode"] == ce._BILLET_MODE_DETAILED_WITH_RESIDUAL
+        assert out["_reconciliation_residual_usd_t"] == pytest.approx(0.499, abs=1e-9)
+
+    def test_efs_uses_summary_fitted(self, state):
+        out = ce.compute_billet_conversion(state, "EFS")
+        assert out["billet_mode"] == ce._BILLET_MODE_SUMMARY_FITTED
+        assert out["_reconciliation_residual_usd_t"] == 0.0
+
+    def test_esr_uses_summary_fitted(self, state):
+        out = ce.compute_billet_conversion(state, "ESR")
+        assert out["billet_mode"] == ce._BILLET_MODE_SUMMARY_FITTED
+        assert out["_reconciliation_residual_usd_t"] == 0.0
+
+    def test_company_missing_billet_inputs_raises(self, state):
+        # Strip both EAF consumptions and summary seed → mode lookup should fail.
+        del state["billet"]["EFS"]["summary_other_conversion_usd_per_ton"]
+        with pytest.raises(ValueError, match="structural_non_existence"):
+            ce.compute_billet_conversion(state, "EFS")
+
+
+class TestStage2TradeoffMatrix_Full:
+    """Verification §2.3 — full 4×4 matrix with minimums.
+
+    Source rows: EZDK, EFS, ESR, Market.
+    Buyer columns: EZDK, EFS, ERM, ESR. ERM is buyer-only per Rulebook §1.4.
+
+    Tolerance per cell follows from the underlying source: source-row offer
+    cells use the source company's override; minimum cells inherit from
+    whichever source contributes them.
     """
 
     def test_currency_tag_is_usd(self, state):
         tm = ce.compute_tradeoff_matrix(state)
         assert tm["_currency"] == "USD"
-
-    def test_ezdk_offer_equals_vc_times_ratio(self, state):
-        tm = ce.compute_tradeoff_matrix(state)
-        row = tm["rows"]["EZDK"]
-        expected = row["seller_vc_usd_t"] * row["trade_off_ratio"]
-        assert row["offer_usd_t"] == pytest.approx(expected, abs=1e-9)
-
-    def test_ezdk_offer_matches_verification_within_propagation_tol(self, state):
-        tm = ce.compute_tradeoff_matrix(state)
-        offer = tm["rows"]["EZDK"]["offer_usd_t"]
-        tol = _tol_for("tradeoff_matrix", "EZDK", "offer_usd_t")
-        assert _usd_close(offer, 478.73, tol), (
-            f"EZDK offer: engine={offer:.6f} (rounded {round(offer, 2):.2f}), "
-            f"target=478.73, diff={round(offer, 2) - 478.73:+.4f}, tol=±{tol}"
-        )
-
-    def test_ezdk_to_ezdk_is_own_vc_not_offer(self, state):
-        """Producer-own-VC rule: EZDK buying from itself uses own VC (Rulebook §4.5)."""
-        tm = ce.compute_tradeoff_matrix(state)
-        row = tm["rows"]["EZDK"]
-        assert row["to_EZDK"] == pytest.approx(row["seller_vc_usd_t"], abs=1e-9)
-        assert row["to_EFS"] == pytest.approx(row["offer_usd_t"], abs=1e-9)
-        assert row["to_ERM"] == pytest.approx(row["offer_usd_t"], abs=1e-9)
-        assert row["to_ESR"] == pytest.approx(row["offer_usd_t"], abs=1e-9)
 
     def test_market_row_is_flat_590(self, state):
         tm = ce.compute_tradeoff_matrix(state)
@@ -376,25 +483,109 @@ class TestStage2TradeoffMatrix_Framework:
         for buyer in ("EZDK", "EFS", "ERM", "ESR"):
             assert m[f"to_{buyer}"] == 590
 
-    def test_efs_and_esr_source_rows_are_stubbed(self, state):
+    def test_producer_own_vc_at_diagonal(self, state):
+        """Source==buyer: own VC, not the ratio'd offer (Rulebook §4.5)."""
         tm = ce.compute_tradeoff_matrix(state)
-        assert tm["rows"]["EFS"]["status"] == ce._TRADEOFF_NOT_YET_BUILT
-        assert tm["rows"]["ESR"]["status"] == ce._TRADEOFF_NOT_YET_BUILT
-        assert "to_EZDK" not in tm["rows"]["EFS"]
-        assert "to_EZDK" not in tm["rows"]["ESR"]
+        for src in ("EZDK", "EFS", "ESR"):
+            row = tm["rows"][src]
+            assert row[f"to_{src}"] == pytest.approx(row["seller_vc_usd_t"], abs=1e-9)
 
-    def test_min_per_buyer_excludes_stub_rows(self, state):
-        """Minimums computed only over implemented sources (EZDK + Market)."""
+    def test_offcell_intercompany_uses_offer(self, state):
+        """Source!=buyer: seller_vc × seller_tradeoff_ratio."""
         tm = ce.compute_tradeoff_matrix(state)
-        ezdk_offer = tm["rows"]["EZDK"]["offer_usd_t"]
-        ezdk_vc = tm["rows"]["EZDK"]["seller_vc_usd_t"]
-        market = tm["market_price_usd_t"]
+        for src in ("EZDK", "EFS", "ESR"):
+            row = tm["rows"][src]
+            expected_offer = row["seller_vc_usd_t"] * row["trade_off_ratio"]
+            assert row["offer_usd_t"] == pytest.approx(expected_offer, abs=1e-9)
+            for buyer in ("EZDK", "EFS", "ERM", "ESR"):
+                if buyer == src:
+                    continue
+                assert row[f"to_{buyer}"] == pytest.approx(row["offer_usd_t"], abs=1e-9)
+
+    def test_erm_never_a_source_row(self, state):
+        tm = ce.compute_tradeoff_matrix(state)
+        assert "ERM" not in tm["rows"], "ERM must not appear as a source (Rulebook §1.4)"
+        assert "ERM" not in tm["sources"]
+        assert "ERM" in tm["buyers"]
+
+    def test_source_row_offers_match_verification(self, state):
+        """Verification §2.3 source row 'Price ($/t)' column."""
+        tm = ce.compute_tradeoff_matrix(state)
+        # (source, verification offer, tolerance)
+        expected = [
+            ("EZDK", 478.73, _tol_for("tradeoff_matrix", "EZDK", "offer_usd_t")),
+            ("EFS",  475.45, _tol_for("tradeoff_matrix", "EFS",  "offer_usd_t")),
+            ("ESR",  457.97, _tol_for("tradeoff_matrix", "ESR",  "offer_usd_t")),
+        ]
+        failures = []
+        for src, target, tol in expected:
+            offer = tm["rows"][src]["offer_usd_t"]
+            if not _usd_close(offer, target, tol):
+                failures.append(
+                    f"{src} offer: engine={offer:.6f} (rounded {round(offer, 2):.2f}), "
+                    f"target={target}, diff={round(offer, 2) - target:+.4f}, tol=±{tol}"
+                )
+        assert not failures, "\n".join(failures)
+
+    def test_minimum_per_buyer_matches_verification(self, state):
+        """Verification §2.3 'Minimum' row.
+
+        Minimums inherit tolerance from the source cell that contributes them.
+        - To EZDK: from EZDK own VC → ±0.05 (EZDK Total VC override).
+        - To EFS, To ERM: from ESR offer → ±0.01 (no ESR override).
+        - To ESR: from ESR own VC → ±0.01 (no ESR override).
+        """
+        tm = ce.compute_tradeoff_matrix(state)
+        expected = [
+            ("EZDK", 409.52, _tol_for("billet_conversion", "EZDK", "total_variable_mfg_usd_t")),
+            ("EFS",  457.97, ABS_TOL_USD),
+            ("ERM",  457.97, ABS_TOL_USD),
+            ("ESR",  450.31, ABS_TOL_USD),
+        ]
+        failures = []
         mins = tm["minimum_per_buyer"]
-        # Buyer EZDK: own VC vs market — own VC wins.
-        assert mins["EZDK"] == pytest.approx(min(ezdk_vc, market), abs=1e-9)
-        # Other buyers: EZDK offer vs market.
-        for b in ("EFS", "ERM", "ESR"):
-            assert mins[b] == pytest.approx(min(ezdk_offer, market), abs=1e-9)
+        for buyer, target, tol in expected:
+            eng = mins[buyer]
+            if not _usd_close(eng, target, tol):
+                failures.append(
+                    f"min to {buyer}: engine={eng:.6f} (rounded {round(eng, 2):.2f}), "
+                    f"target={target}, diff={round(eng, 2) - target:+.4f}, tol=±{tol}"
+                )
+        assert not failures, "\n".join(failures)
+
+    def test_minimum_source_attribution(self, state):
+        """Verify which source contributes the minimum for each buyer."""
+        tm = ce.compute_tradeoff_matrix(state)
+        srcs = tm["minimum_per_buyer_source"]
+        assert srcs["EZDK"] == "EZDK"  # own VC
+        assert srcs["EFS"]  == "ESR"   # ESR external (450.31 × 1.017)
+        assert srcs["ERM"]  == "ESR"   # ESR external; ERM has no own VC
+        assert srcs["ESR"]  == "ESR"   # own VC
+
+
+class TestStage2MarketBilletBuildup:
+    """Verification §2.4 — Market price components."""
+
+    def test_components_match(self, state):
+        m = state["billet"]["market"]
+        c = m["components_usd_t"]
+        assert c["base"] == 428
+        assert c["safe_guards"] == 74
+        assert c["other_costs"] == 88
+
+    def test_components_sum_to_market_price(self, state):
+        m = state["billet"]["market"]
+        c = m["components_usd_t"]
+        total = c["base"] + c["safe_guards"] + c["other_costs"]
+        assert total == 590
+        assert m["market_price_usd_t"] == total
+
+    def test_engine_helper_returns_590(self, state):
+        assert ce._market_billet_price(state) == 590
+
+    def test_market_appears_in_tradeoff_at_590(self, state):
+        tm = ce.compute_tradeoff_matrix(state)
+        assert tm["market_price_usd_t"] == 590
 
 
 # ---------------------------------------------------------------------------
