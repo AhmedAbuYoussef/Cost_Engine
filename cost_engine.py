@@ -572,6 +572,321 @@ def compute_tradeoff_matrix(state: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Stage 3 — Finished Products (Rulebook §5; brief §4.3) — step 4
+# ---------------------------------------------------------------------------
+
+_FINISHED_PRODUCERS = {
+    "Rebar": ("EZDK", "EFS", "ERM", "ESR"),
+    "Wire Rod": ("EZDK",),
+    "HRC": ("EZDK", "EFS"),
+}
+
+# Long-line products consume billet and carry a sourcing_decision; HRC is
+# flat-line (scrap/DRI charge, no billet) and carries none.
+_LONG_LINE_PRODUCTS = ("Rebar", "Wire Rod")
+_FINISHED_YIELD_KEY = {"Rebar": "rebar_yield", "Wire Rod": "wire_yield"}
+_FINISHED_CONSUMPTIONS_KEY = {
+    "Rebar": "consumptions_per_ton_rebar",
+    "Wire Rod": "consumptions_per_ton_wire",
+}
+
+_SOURCING_OWN = "own"
+_SOURCING_MARKET = "market"
+_SOURCING_INTERNAL_MINIMUM = "internal_minimum"
+_LEGAL_SOURCING_DECISIONS = (
+    _SOURCING_OWN, _SOURCING_MARKET, _SOURCING_INTERNAL_MINIMUM,
+)
+
+_FINISHED_MODE_DETAILED = "detailed"
+_FINISHED_MODE_SUMMARY_FITTED = "summary_fitted"
+_FINISHED_MODE_DATA_GAP = "data_gap"
+
+
+def _require_finished_producer(product: str, company: str) -> None:
+    producers = _FINISHED_PRODUCERS.get(product)
+    if producers is None:
+        raise ValueError(
+            f"structural_non_existence: unknown finished product '{product}'; "
+            f"defined products: {tuple(_FINISHED_PRODUCERS)}."
+        )
+    if company not in producers:
+        raise ValueError(
+            f"structural_non_existence: {product} is produced only by "
+            f"{producers}; requested '{company}'."
+        )
+
+
+def _finished_material_price_sc1(state: dict, company: str, product: str) -> float:
+    """Sc1 material price dispatch on sourcing_decision (brief §4.3, Q1/Q2).
+
+    - "own": producer's own billet VC at full precision (producer-own-VC
+      rule). Illegal for non-billet-producers (ERM).
+    - "market": market billet price (§4.6 build-up, 590).
+    - "internal_minimum": cheapest EXTERNAL offer from the trade-off matrix —
+      own-VC cells are excluded; the matrix stays decision-support, never an
+      auto-dispatch rule for the default path.
+
+    A missing or unknown sourcing_decision raises: the engine never picks a
+    sourcing path silently.
+    """
+    _require_finished_producer(product, company)
+    fp = state["finished_products"][product][company]
+    decision = fp.get("sourcing_decision")
+    if decision == _SOURCING_OWN:
+        if company not in _BILLET_PRODUCERS:
+            raise ValueError(
+                f"illegal sourcing_decision 'own' for non-billet-producer "
+                f"'{company}' ({product})."
+            )
+        return compute_billet_conversion(state, company)["total_variable_mfg_usd_t"]
+    if decision == _SOURCING_MARKET:
+        return _market_billet_price(state)
+    if decision == _SOURCING_INTERNAL_MINIMUM:
+        matrix = compute_tradeoff_matrix(state)
+        external = {
+            src: row[f"to_{company}"]
+            for src, row in matrix["rows"].items()
+            if src != company
+        }
+        return min(external.values())
+    raise ValueError(
+        f"illegal sourcing_decision {decision!r} for {product}/{company}; "
+        f"legal values: {_LEGAL_SOURCING_DECISIONS}."
+    )
+
+
+def _finished_material_price_sc2(state: dict) -> float:
+    """Sc2: market billet price for everyone, regardless of sourcing_decision."""
+    return _market_billet_price(state)
+
+
+def _finished_yield_effect(material_price_usd: float, finished_yield: float) -> float:
+    """Material × (1/yield − 1). Finished yield only — EAF×CCP is already
+    embedded in the billet cost (brief §4.3)."""
+    return material_price_usd * (1.0 / finished_yield - 1.0)
+
+
+def _finished_home_scrap_deduction(
+    home_scrap_pct_of_billets: float,
+    byproduct_price_usd_t: float,
+    finished_yield: float,
+) -> float:
+    """(billets used ÷ finished ton) × home-scrap % × byproduct price.
+
+    billets/finished = 1/finished_yield. The stored percentage is negative
+    (consumption-block convention, same as the EAF byproduct credit), so the
+    result is the negative deduction directly.
+    """
+    return (home_scrap_pct_of_billets / finished_yield) * byproduct_price_usd_t
+
+
+def _finished_other_conversion(consumptions: dict, unit_prices_usd: dict) -> dict:
+    """Long-line other-conversion items in $/t finished.
+
+    Same locked unit convention as the EAF stage: `_kg` prices are stored at
+    $/MT and divided by 1000 at point of use. `work_roll_usd_t` is a direct
+    $/t-finished charge. `byproduct_pct_of_billets_used` belongs to the Home
+    Scrap Deduction line and is excluded here.
+    """
+    refr = consumptions["refractories_kg"] * unit_prices_usd["refractories_kg"] / 1000.0
+    elec = consumptions["electricity_kwh"] * unit_prices_usd["electricity_kwh"]
+    ng   = consumptions["natural_gas_nm3"] * unit_prices_usd["natural_gas_nm3"]
+    h2o  = consumptions["water_m3"]        * unit_prices_usd["water_m3"]
+    roll = consumptions["work_roll_usd_t"]
+    return {
+        "refractories": refr,
+        "electricity": elec,
+        "natural_gas": ng,
+        "water": h2o,
+        "work_roll": roll,
+        "total": refr + elec + ng + h2o + roll,
+    }
+
+
+def _resolve_home_scrap_inputs(fp: dict, product: str):
+    """Return (pct, byproduct_price) for the home-scrap line, or None.
+
+    Detailed consumption blocks carry the pair natively (EZDK Rebar). For
+    summary-fitted companies the pair arrives as Excel-confirmed conftest
+    seeds (`home_scrap_pct_of_billets_used` / `byproduct_price_usd_t`) —
+    never back-solved from the verification sheet.
+    """
+    cons = fp.get(_FINISHED_CONSUMPTIONS_KEY[product], {})
+    prices = fp.get("unit_prices_usd", {})
+    if "byproduct_pct_of_billets_used" in cons and "byproduct_rejected_slabs_t" in prices:
+        return cons["byproduct_pct_of_billets_used"], prices["byproduct_rejected_slabs_t"]
+    if "home_scrap_pct_of_billets_used" in fp and "byproduct_price_usd_t" in fp:
+        return fp["home_scrap_pct_of_billets_used"], fp["byproduct_price_usd_t"]
+    return None
+
+
+def _finished_long_line_view(
+    state: dict, company: str, product: str, material_price: float, scenario: str
+) -> dict:
+    """Shared Sc1/Sc2 assembly — Material Price is the only differing input."""
+    fp = state["finished_products"][product][company]
+    finished_yield = fp[_FINISHED_YIELD_KEY[product]]
+    yield_effect = _finished_yield_effect(material_price, finished_yield)
+    notes = []
+
+    cons_key = _FINISHED_CONSUMPTIONS_KEY[product]
+    if cons_key in fp:
+        mode = _FINISHED_MODE_DETAILED
+        other_conversion = _finished_other_conversion(
+            fp[cons_key], fp["unit_prices_usd"]
+        )["total"]
+    elif "summary_other_conversion_usd_per_ton" in fp:
+        mode = _FINISHED_MODE_SUMMARY_FITTED
+        other_conversion = fp["summary_other_conversion_usd_per_ton"]
+        notes.append(
+            "other conversion is a verification-seeded scalar; this line item "
+            "is plumbing-verified only (see TESTING_NOTES.md, step 4)"
+        )
+    else:
+        mode = _FINISHED_MODE_DATA_GAP
+        other_conversion = None
+        notes.append(
+            f"no other-conversion inputs for {product}/{company} "
+            f"(Rulebook §13 data gap); component omitted from totals"
+        )
+
+    hs_inputs = _resolve_home_scrap_inputs(fp, product)
+    if hs_inputs is not None:
+        pct, bp_price = hs_inputs
+        home_scrap = _finished_home_scrap_deduction(pct, bp_price, finished_yield)
+    else:
+        home_scrap = None
+        notes.append(
+            f"home-scrap inputs for {product}/{company} pending "
+            f"Excel-confirmed conftest seeds (Rulebook §13 data gap)"
+        )
+
+    if other_conversion is not None and home_scrap is not None:
+        total_conversion = yield_effect + home_scrap + other_conversion
+        total_vc = material_price + total_conversion
+    else:
+        total_conversion = None
+        total_vc = None
+
+    return {
+        "_currency": "USD",
+        "company": company,
+        "product": product,
+        "scenario": scenario,
+        "finished_mode": mode,
+        "finished_yield": finished_yield,
+        "material_price_usd_t": material_price,
+        "yield_effect_usd_t": yield_effect,
+        "home_scrap_deduction_usd_t": home_scrap,
+        "other_conversion_usd_t": other_conversion,
+        "total_conversion_usd_t": total_conversion,
+        "total_variable_mfg_usd_t": total_vc,
+        "_notes": notes,
+    }
+
+
+def compute_finished_sc1(state: dict, company: str, product: str) -> dict:
+    """Verification §3.1/§3.2 Sc1 — in-house-billet scenario (USD/t)."""
+    _require_finished_producer(product, company)
+    if product not in _LONG_LINE_PRODUCTS:
+        raise ValueError(
+            f"structural_non_existence: '{product}' is not a long-line "
+            f"product; HRC is served by compute_hrc_summary."
+        )
+    material = _finished_material_price_sc1(state, company, product)
+    return _finished_long_line_view(state, company, product, material, "sc1")
+
+
+def compute_finished_sc2(state: dict, company: str, product: str) -> dict:
+    """Verification §3.1/§3.2 Sc2 — market-billet scenario (USD/t).
+
+    Emits `difference_sc1_minus_sc2_usd_t` when both scenario totals are
+    computable; None otherwise (pending components propagate).
+    """
+    _require_finished_producer(product, company)
+    if product not in _LONG_LINE_PRODUCTS:
+        raise ValueError(
+            f"structural_non_existence: '{product}' is not a long-line "
+            f"product; HRC is served by compute_hrc_summary."
+        )
+    material = _finished_material_price_sc2(state)
+    out = _finished_long_line_view(state, company, product, material, "sc2")
+    sc1_total = compute_finished_sc1(state, company, product)["total_variable_mfg_usd_t"]
+    if sc1_total is not None and out["total_variable_mfg_usd_t"] is not None:
+        out["difference_sc1_minus_sc2_usd_t"] = sc1_total - out["total_variable_mfg_usd_t"]
+    else:
+        out["difference_sc1_minus_sc2_usd_t"] = None
+    return out
+
+
+def compute_hrc_summary(state: dict, company: str) -> dict:
+    """Verification §3.3 — HRC flat-line summary view (USD/t).
+
+    Step-4 skeleton: combined yield (full-precision EAF × TSC × HSM) and the
+    blending echo are live. Material Price awaits Excel-confirmed
+    `flat_line_scrap_prices_usd` conftest seeds (independent of billet scrap
+    prices, never back-solved); when present, DRI price resolves via
+    `_resolve_dri_price_for_buyer` (EZDK → own DRI VC; EFS → ERM DRI VC, no
+    margin — item-7 ruling). Pending components are None with a note.
+    """
+    _require_finished_producer("HRC", company)
+    h = state["finished_products"]["HRC"][company]
+    y = h["yields"]
+    combined_yield = y["eaf"] * y["tsc"] * y["hsm"]
+    notes = []
+
+    scrap = h.get("flat_line_scrap_prices_usd")
+    if scrap is not None:
+        dri_price = _resolve_dri_price_for_buyer(state, company)
+        material = _billet_material_price_summary(
+            h["blending_pct"],
+            {
+                "dri": dri_price,
+                "local_scrap": scrap["local_scrap_t"],
+                "imported_scrap": scrap["imported_scrap_t"],
+            },
+        )
+        yield_effect = _finished_yield_effect(material, combined_yield)
+    else:
+        material = None
+        yield_effect = None
+        notes.append(
+            "Material Price / Yield Effect pending Excel-confirmed "
+            "flat_line_scrap_prices_usd conftest seeds (Rulebook §13 data gap)"
+        )
+
+    other_conversion = h.get("summary_other_conversion_usd_per_ton")
+    if other_conversion is None:
+        notes.append(
+            "Other Conversion pending §3.3 scalar seed (Rulebook §13 data gap)"
+        )
+    else:
+        notes.append(
+            "other conversion is a verification-seeded scalar; this line item "
+            "is plumbing-verified only (see TESTING_NOTES.md, step 4)"
+        )
+
+    if material is not None and other_conversion is not None:
+        total_vc = material + yield_effect + other_conversion
+    else:
+        total_vc = None
+
+    return {
+        "_currency": "USD",
+        "company": company,
+        "product": "HRC",
+        "combined_yield": combined_yield,
+        "yields": dict(y),
+        "blending_pct": dict(h["blending_pct"]),
+        "material_price_usd_t": material,
+        "yield_effect_usd_t": yield_effect,
+        "other_conversion_usd_t": other_conversion,
+        "total_variable_mfg_usd_t": total_vc,
+        "_notes": notes,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Integrity checks (wired incrementally — check 2 lands in step 2)
 # ---------------------------------------------------------------------------
 

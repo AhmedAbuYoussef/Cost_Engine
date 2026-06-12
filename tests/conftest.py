@@ -82,4 +82,32 @@ def state(_baseline_state):
     }
     s["billet"]["ESR"]["summary_other_conversion_usd_per_ton"] = 97.97
 
+    # Step 4 — sourcing_decision defaults (brief §4.3 Q2 ruling): producers
+    # → "own", ERM → "market". HRC is flat-line (no billet) and carries no
+    # sourcing_decision.
+    for co in ("EZDK", "EFS", "ESR"):
+        s["finished_products"]["Rebar"][co]["sourcing_decision"] = "own"
+    s["finished_products"]["Rebar"]["ERM"]["sourcing_decision"] = "market"
+    s["finished_products"]["Wire Rod"]["EZDK"]["sourcing_decision"] = "own"
+
+    # Step 4 — EFS/ERM/ESR Rebar Other Conversion seeded as per-company
+    # scalars from verification §3.1 Sc1 (item-3 ruling; Step 3 EFS/ESR
+    # billet precedent). The Sc1 line item is plumbing-verified only; the
+    # Sc2 column and Difference line are the non-circular cross-check once
+    # home-scrap inputs land. Real consumption detail replaces these at the
+    # quarterly refresh. See TESTING_NOTES.md "Step 4".
+    s["finished_products"]["Rebar"]["EFS"]["summary_other_conversion_usd_per_ton"] = 11.32
+    s["finished_products"]["Rebar"]["ERM"]["summary_other_conversion_usd_per_ton"] = 17.18
+    s["finished_products"]["Rebar"]["ESR"]["summary_other_conversion_usd_per_ton"] = 20.64
+
+    # Step 4 — HRC Other Conversion scalars from verification §3.3 (item-6
+    # ruling; Q4-extension, summary-level assertions only).
+    s["finished_products"]["HRC"]["EZDK"]["summary_other_conversion_usd_per_ton"] = 108.87
+    s["finished_products"]["HRC"]["EFS"]["summary_other_conversion_usd_per_ton"] = 128.60
+
+    # Step 4 — NOT seeded (pending Excel-confirmed values from the user):
+    # - EFS/ERM/ESR Rebar home_scrap_pct_of_billets_used / byproduct_price_usd_t
+    # - HRC flat_line_scrap_prices_usd (independent of billet scrap prices)
+    # - EZDK Rebar unit-price overrides (suspected display-rounded NG/water)
+
     return s

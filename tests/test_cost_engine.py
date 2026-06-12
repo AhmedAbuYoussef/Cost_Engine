@@ -43,6 +43,18 @@ _USD_TOL_OVERRIDES = {
     # Step 3 — Trade-off matrix EFS source row propagation (×1.016).
     ("tradeoff_matrix",   "EFS", "offer_usd_t"):                 0.07,
     # ESR uses default ±0.01 everywhere (its propagation is small enough).
+    # Step 4 — finished Sc1 material price inherits own-billet-VC drift
+    # (same magnitudes as the billet_conversion total_variable_mfg overrides).
+    ("finished_sc1", "EZDK", "material_price_usd_t"): 0.05,
+    ("finished_sc1", "EFS",  "material_price_usd_t"): 0.06,
+    # Step 4 — ERM/ESR rebar yield effects: 4dp display-rounded JSON yields
+    # (engine 12.53 vs sheet 12.55; 19.38 vs 19.36). Derived bound ±0.03;
+    # see TESTING_NOTES.md "Step 4". Tightens to ±0.01 when Excel
+    # formula-bar yields land.
+    ("finished_sc1", "ERM", "yield_effect_usd_t"): 0.03,
+    ("finished_sc1", "ESR", "yield_effect_usd_t"): 0.03,
+    ("finished_sc2", "ERM", "yield_effect_usd_t"): 0.03,
+    ("finished_sc2", "ESR", "yield_effect_usd_t"): 0.03,
 }
 
 
@@ -586,6 +598,240 @@ class TestStage2MarketBilletBuildup:
     def test_market_appears_in_tradeoff_at_590(self, state):
         tm = ce.compute_tradeoff_matrix(state)
         assert tm["market_price_usd_t"] == 590
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Finished Products (verification §3) — step 4 Excel-independent
+# subset. Pending assertions (wired next sub-step on Excel-confirmed values):
+#   - EZDK Rebar Other Conversion / Total Conversion / Total VC (Sc1 and Sc2)
+#   - EZDK Rebar Sc2 Home Scrap + cascaded cells (group a)
+#   - EFS/ERM/ESR Rebar Home Scrap rows and all totals
+#   - HRC Material Price / Yield Effect / Other Conversion / Total VC
+#     (groups b and item-6; plus the §3.3 Combined Yield cell discrepancy —
+#     see TESTING_NOTES.md "Step 4")
+# ---------------------------------------------------------------------------
+
+class TestFinishedProducerGuard:
+    """Structural production matrix: Rebar×4, Wire Rod×EZDK, HRC×{EZDK, EFS}."""
+
+    LEGAL = {
+        "Rebar": ("EZDK", "EFS", "ERM", "ESR"),
+        "Wire Rod": ("EZDK",),
+        "HRC": ("EZDK", "EFS"),
+    }
+
+    def test_legal_combinations_pass(self):
+        for product, companies in self.LEGAL.items():
+            for co in companies:
+                ce._require_finished_producer(product, co)  # must not raise
+
+    def test_wire_rod_non_ezdk_raises(self):
+        for co in ("EFS", "ERM", "ESR"):
+            with pytest.raises(ValueError, match="structural_non_existence"):
+                ce._require_finished_producer("Wire Rod", co)
+
+    def test_hrc_non_producers_raise(self):
+        for co in ("ERM", "ESR"):
+            with pytest.raises(ValueError, match="structural_non_existence"):
+                ce._require_finished_producer("HRC", co)
+
+    def test_unknown_product_raises(self):
+        with pytest.raises(ValueError, match="structural_non_existence"):
+            ce._require_finished_producer("Plates", "EZDK")
+
+    def test_sc1_on_hrc_redirects_to_hrc_summary(self, state):
+        with pytest.raises(ValueError, match="compute_hrc_summary"):
+            ce.compute_finished_sc1(state, "EZDK", "HRC")
+
+
+class TestSc1SourcingDispatch:
+    """Brief §4.3 Q1/Q2: own / market / internal_minimum + illegal cases."""
+
+    def test_producers_own_equals_own_billet_vc(self, state):
+        for co in ("EZDK", "EFS", "ESR"):
+            mat = ce._finished_material_price_sc1(state, co, "Rebar")
+            own = ce.compute_billet_conversion(state, co)["total_variable_mfg_usd_t"]
+            assert mat == own  # full precision, no pre-rounding
+
+    def test_erm_market_default_is_590(self, state):
+        assert ce._finished_material_price_sc1(state, "ERM", "Rebar") == 590
+
+    def test_erm_internal_minimum_is_cheapest_external(self, state):
+        state["finished_products"]["Rebar"]["ERM"]["sourcing_decision"] = "internal_minimum"
+        mat = ce._finished_material_price_sc1(state, "ERM", "Rebar")
+        assert _usd_close(mat, 457.97)  # ESR offer, verification §3.1 footnote
+        esr_offer = ce.compute_tradeoff_matrix(state)["rows"]["ESR"]["to_ERM"]
+        assert mat == esr_offer
+
+    def test_producer_internal_minimum_excludes_own_vc(self, state):
+        # EZDK's own VC (409.56) is the global minimum but is NOT an external
+        # offer; cheapest external for EZDK is the ESR offer.
+        state["finished_products"]["Rebar"]["EZDK"]["sourcing_decision"] = "internal_minimum"
+        mat = ce._finished_material_price_sc1(state, "EZDK", "Rebar")
+        assert _usd_close(mat, 457.97)
+
+    def test_erm_own_raises(self, state):
+        state["finished_products"]["Rebar"]["ERM"]["sourcing_decision"] = "own"
+        with pytest.raises(ValueError, match="non-billet-producer"):
+            ce._finished_material_price_sc1(state, "ERM", "Rebar")
+
+    def test_unknown_decision_raises(self, state):
+        state["finished_products"]["Rebar"]["EZDK"]["sourcing_decision"] = "cheapest"
+        with pytest.raises(ValueError, match="illegal sourcing_decision"):
+            ce._finished_material_price_sc1(state, "EZDK", "Rebar")
+
+    def test_missing_decision_raises(self, state):
+        del state["finished_products"]["Rebar"]["EZDK"]["sourcing_decision"]
+        with pytest.raises(ValueError, match="illegal sourcing_decision"):
+            ce._finished_material_price_sc1(state, "EZDK", "Rebar")
+
+
+class TestStage3Rebar_Sc1:
+    """Verification §3.1 Sc1 — Excel-independent rows only."""
+
+    MATERIAL = {"EZDK": 409.52, "EFS": 467.96, "ERM": 590.00, "ESR": 450.31}
+    YIELD_EFFECT = {"EZDK": 23.19, "EFS": 14.03, "ERM": 12.55, "ESR": 14.78}
+
+    def test_material_price_row(self, state):
+        for co, target in self.MATERIAL.items():
+            out = ce.compute_finished_sc1(state, co, "Rebar")
+            tol = _tol_for("finished_sc1", co, "material_price_usd_t")
+            assert _usd_close(out["material_price_usd_t"], target, tol), (
+                f"{co} Sc1 material {out['material_price_usd_t']:.4f} "
+                f"vs {target} (±{tol})"
+            )
+
+    def test_yield_effect_row(self, state):
+        for co, target in self.YIELD_EFFECT.items():
+            out = ce.compute_finished_sc1(state, co, "Rebar")
+            tol = _tol_for("finished_sc1", co, "yield_effect_usd_t")
+            assert _usd_close(out["yield_effect_usd_t"], target, tol), (
+                f"{co} Sc1 yield effect {out['yield_effect_usd_t']:.4f} "
+                f"vs {target} (±{tol})"
+            )
+
+    def test_ezdk_home_scrap_deduction(self, state):
+        # Engine: (−0.043 × 318.94) / 0.9464 = −14.4911 → −14.49 vs sheet
+        # (14.48), inside the standard ±0.01-after-rounding tolerance.
+        out = ce.compute_finished_sc1(state, "EZDK", "Rebar")
+        assert _usd_close(out["home_scrap_deduction_usd_t"], -14.48)
+
+    def test_currency_tags(self, state):
+        for co in ("EZDK", "EFS", "ERM", "ESR"):
+            assert ce.compute_finished_sc1(state, co, "Rebar")["_currency"] == "USD"
+
+
+class TestStage3Rebar_Sc2:
+    """Verification §3.1 Sc2 — Excel-independent rows only.
+
+    EZDK Home Scrap and its cascaded cells (Total Conversion, Total VC,
+    Difference) are PENDING-EXCEL-CONFIRMATION (group a) — not asserted.
+    """
+
+    YIELD_EFFECT = {"EZDK": 33.42, "EFS": 17.68, "ERM": 12.55, "ESR": 19.36}
+
+    def test_material_price_row_is_market_590(self, state):
+        for co in ("EZDK", "EFS", "ERM", "ESR"):
+            out = ce.compute_finished_sc2(state, co, "Rebar")
+            assert out["material_price_usd_t"] == 590
+
+    def test_yield_effect_row(self, state):
+        for co, target in self.YIELD_EFFECT.items():
+            out = ce.compute_finished_sc2(state, co, "Rebar")
+            tol = _tol_for("finished_sc2", co, "yield_effect_usd_t")
+            assert _usd_close(out["yield_effect_usd_t"], target, tol), (
+                f"{co} Sc2 yield effect {out['yield_effect_usd_t']:.4f} "
+                f"vs {target} (±{tol})"
+            )
+
+    def test_erm_sc1_equals_sc2_invariant(self, state):
+        # ERM defaults to market sourcing, so Sc1 and Sc2 are the same view.
+        sc1 = ce.compute_finished_sc1(state, "ERM", "Rebar")
+        sc2 = ce.compute_finished_sc2(state, "ERM", "Rebar")
+        for cell in (
+            "material_price_usd_t",
+            "yield_effect_usd_t",
+            "home_scrap_deduction_usd_t",
+            "other_conversion_usd_t",
+            "total_conversion_usd_t",
+            "total_variable_mfg_usd_t",
+        ):
+            assert sc1[cell] == sc2[cell], cell
+
+    def test_currency_tags(self, state):
+        for co in ("EZDK", "EFS", "ERM", "ESR"):
+            assert ce.compute_finished_sc2(state, co, "Rebar")["_currency"] == "USD"
+
+
+class TestStage3WireRod_Structural:
+    """Verification §3.2 gives no numeric targets; structural assertions only
+    (item-4 ruling: data-gap note, no other-conversion component)."""
+
+    def test_sc1_material_is_own_billet_vc(self, state):
+        out = ce.compute_finished_sc1(state, "EZDK", "Wire Rod")
+        own = ce.compute_billet_conversion(state, "EZDK")["total_variable_mfg_usd_t"]
+        assert out["material_price_usd_t"] == own
+
+    def test_yield_effect_derivation(self, state):
+        out = ce.compute_finished_sc1(state, "EZDK", "Wire Rod")
+        expected = out["material_price_usd_t"] * (1.0 / 0.9778 - 1.0)
+        assert out["yield_effect_usd_t"] == pytest.approx(expected, abs=1e-9)
+
+    def test_data_gap_mode_and_pending_components(self, state):
+        out = ce.compute_finished_sc1(state, "EZDK", "Wire Rod")
+        assert out["finished_mode"] == ce._FINISHED_MODE_DATA_GAP
+        assert out["other_conversion_usd_t"] is None
+        assert out["home_scrap_deduction_usd_t"] is None
+        assert out["total_variable_mfg_usd_t"] is None
+        assert any("data gap" in n for n in out["_notes"])
+
+    def test_currency_tag(self, state):
+        assert ce.compute_finished_sc1(state, "EZDK", "Wire Rod")["_currency"] == "USD"
+
+
+class TestStage3HRC_Skeleton:
+    """Verification §3.3 — step-4 skeleton.
+
+    The sheet's Combined Yield cells (82.37 / 81.43) are NOT asserted: they
+    disagree with the full-precision product of the displayed stage yields
+    (82.4100 / 81.4611) AND with the sheet's own Yield Effect row, which
+    reproduces only from the full-precision product. PENDING-EXCEL — see
+    TESTING_NOTES.md "Step 4". The identity assertion below pins the engine
+    formula; the sheet-cell assertion is wired once Excel adjudicates.
+    """
+
+    def test_combined_yield_identity(self, state):
+        for co in ("EZDK", "EFS"):
+            y = state["finished_products"]["HRC"][co]["yields"]
+            out = ce.compute_hrc_summary(state, co)
+            assert out["combined_yield"] == pytest.approx(
+                y["eaf"] * y["tsc"] * y["hsm"], abs=1e-12
+            )
+
+    def test_blending_echo(self, state):
+        out = ce.compute_hrc_summary(state, "EZDK")
+        assert out["blending_pct"] == {
+            "dri": 0.80, "local_scrap": 0.1796, "imported_scrap": 0.0204,
+        }
+        out = ce.compute_hrc_summary(state, "EFS")
+        assert out["blending_pct"] == {
+            "dri": 0.70, "local_scrap": 0.21, "imported_scrap": 0.09,
+        }
+
+    def test_pending_components_are_none_with_notes(self, state):
+        for co in ("EZDK", "EFS"):
+            out = ce.compute_hrc_summary(state, co)
+            assert out["material_price_usd_t"] is None
+            assert out["yield_effect_usd_t"] is None
+            assert out["total_variable_mfg_usd_t"] is None
+            # The §3.3 scalar seed is present (plumbing only, not asserted
+            # against the sheet until the item-6 sub-step).
+            assert out["other_conversion_usd_t"] is not None
+            assert any("pending" in n for n in out["_notes"])
+
+    def test_currency_tags(self, state):
+        for co in ("EZDK", "EFS"):
+            assert ce.compute_hrc_summary(state, co)["_currency"] == "USD"
 
 
 # ---------------------------------------------------------------------------

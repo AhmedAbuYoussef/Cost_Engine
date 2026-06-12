@@ -365,3 +365,87 @@ Every override has a documented root cause: §13 data-gap propagation
 residual absorbed at a single line (EZDK billet Other Conversion).
 Removing any override should fail loudly the next time the JSON or
 verification source changes.
+
+---
+
+## Step 4 — Finished Products, Excel-independent subset
+
+**Session date:** 2026-06-12. Scope per user instruction: structural guard,
+sourcing dispatch, yield-effect and material-price rows, EZDK Sc1 home
+scrap, ERM Sc1=Sc2 invariant, HRC skeleton, currency tags. Everything else
+is deliberately unasserted pending Excel-confirmed values.
+
+### Conftest seeding (no JSON modification)
+
+1. `sourcing_decision` defaults (brief §4.3 Q2 ruling): Rebar EZDK/EFS/ESR
+   and Wire Rod EZDK → `"own"`; Rebar ERM → `"market"`. HRC carries no
+   sourcing field (flat line buys no billet).
+2. Rebar EFS/ERM/ESR `summary_other_conversion_usd_per_ton` = 11.32 /
+   17.18 / 20.64, transcribed from verification §3.1 Sc1 (item-3 ruling,
+   Step 3 billet precedent). **Circularity record:** the Sc1 Other
+   Conversion line item for these companies is *plumbing-verified* — the
+   asserted value is the seeded value. The non-circular arithmetic
+   cross-check is the Sc2 column and the Difference (Sc1 − Sc2) line,
+   which exercise the same scalar against independently-computed material
+   and yield-effect terms; these get wired when home-scrap inputs land.
+   Real consumption detail replaces the scalars at the quarterly refresh.
+3. HRC EZDK/EFS `summary_other_conversion_usd_per_ton` = 108.87 / 128.60
+   from §3.3 (item-6 ruling, Q4-extension). Summary-level assertions only;
+   none wired yet in this sub-step.
+
+NOT seeded (pending user-supplied Excel formula-bar values, never
+back-solved): EFS/ERM/ESR rebar home-scrap % + byproduct price; HRC
+`flat_line_scrap_prices_usd` (independent of billet scrap prices); EZDK
+Rebar unit-price overrides (suspected display-rounded NG 0.25 vs 0.2507,
+water 0.27 vs 0.2716 — engine Other Conversion 16.2282 vs sheet 16.29,
+Total VC 434.50 vs 434.52; both **unasserted**, per direction no tolerance
+widening).
+
+### Per-cell tolerance overrides added in step 4
+
+| Cell                                  | Override | Measured drift | Root cause |
+|---------------------------------------|----------|---------------:|---|
+| Sc1 Material Price (EZDK)             | ±0.05    | 0.044          | Own-billet-VC propagation (= billet Total VC override) |
+| Sc1 Material Price (EFS)              | ±0.06    | 0.055          | Same, EFS chain |
+| Sc1/Sc2 Yield Effect (ERM)            | ±0.03    | 0.017          | 4dp display-rounded JSON yield (below) |
+| Sc1/Sc2 Yield Effect (ESR)            | ±0.03    | 0.010 / 0.018  | Same |
+
+**Yield-effect drift derivation.** The JSON rebar yields are 4dp
+display-rounded (0.9792, 0.9682). The sheet's ERM cells (12.55) imply a
+full-precision yield ≈ 0.979174 — which itself rounds to 0.9792 — so this
+is the §13 display-rounding class, not an engine defect. Bound:
+`d(YE) = material × Δ(1/y) ≈ 590 × 0.00005 / 0.9584 ≈ 0.031` → ±0.03.
+EZDK/EFS yield effects stay at the default ±0.01. Tightens to ±0.01 when
+Excel formula-bar yields arrive.
+
+### NEW FINDING — §3.3 Combined Yield cells (PENDING-EXCEL)
+
+The sheet's Combined Yield cells do not reproduce from the full-precision
+product of its own displayed stage yields, and they contradict the sheet's
+own Yield Effect row:
+
+| Company | Sheet Combined | EAF×TSC×HSM (full precision) | YE-implied combined |
+|---|---|---|---|
+| EZDK | 82.37 | 82.4100 (0.8574 × 0.9852 × 0.9756) | 82.4100 (59.92 = 280.73 × (1/0.82410 − 1)) |
+| EFS  | 81.43 | 81.4611 (0.8482 × 0.98 × 0.98)     | 81.4611 (68.26 = 299.96 × (1/0.81461 − 1)) |
+
+The Yield Effect row (59.92 / 68.26) is consistent with the full-precision
+product and inconsistent with the displayed Combined Yield cells (would
+give 60.09 / 68.41). The Combined Yield cells are therefore suspected
+display anomalies in the verification sheet. Engine asserts the
+**identity** (combined = eaf × tsc × hsm) only; the sheet-cell assertion
+is held until the Excel pull adjudicates. No tolerance was widened and no
+value was fudged to force a pass.
+
+### Assertions deliberately pending (wire-up list for next sub-step)
+
+- Group (a): EZDK Rebar Sc2 Home Scrap, Total Conversion, Total VC,
+  Difference.
+- Group (b): HRC Material Price (281 / 300 targets), Yield Effect — on
+  arrival of `flat_line_scrap_prices_usd` seeds.
+- Group (c) NEW: §3.3 Combined Yield sheet cells (above).
+- EZDK Rebar Other Conversion + Total VC (Sc1/Sc2) — on arrival of
+  unit-price overrides.
+- EFS/ERM/ESR Rebar Home Scrap rows, Total Conversion, Total VC,
+  Difference — on arrival of home-scrap % + byproduct prices.
+- HRC Other Conversion + Total VC summary assertions (item-6).
