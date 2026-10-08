@@ -1,21 +1,21 @@
 """
-Ezz Steel cost engine — a pure-Python replica of the "New Corp Model" workbook.
+Ezz Steel cost engine.
 
-The workbook is the specification: every function below re-implements the
-formulas of one sheet (or one sheet template), in the same order Excel evaluates
-them.  ``compute_all(state)`` takes the state produced by
-``excel_io.extract_state`` and returns every view of the model.
+The engine runs one model under one of two rule sets:
 
-Design rules (see step1_brief_cost_engine_v2.md):
-  * pure functions, no I/O, no globals mutated, deterministic;
-  * full float precision — rounding is the display layer's job;
-  * Excel's own quirks are reproduced, not "fixed" (each one is listed in
-    MODEL_QUIRKS.md); a division by zero, which Excel shows as #DIV/0!, is
-    returned as ``None``.
+* ``CORRECTED_RULES`` (default) — the model with every workbook mistake fixed and
+  no hardcoded results (see MODEL_FIXES.md for each fix and its effect);
+* ``LEGACY_RULES`` — an exact replica of the "New Corp Model" workbook, quirks
+  included.  The tests prove it reproduces the workbook cell for cell, and the
+  fix-by-fix bridge (model_fixes.py) starts from it.
 
-Every output value has a known home cell in the workbook.  ``excel_cells(outputs)``
-yields ``("Sheet!A1", value)`` pairs, which is how the tests prove the engine
-reproduces Excel cell for cell.
+Which rule set applies comes from ``state["rules_profile"]`` ("corrected" or
+"legacy"), or from the ``rules`` argument of ``compute_all``.  Each rule is a
+named switch, so any single fix can be turned on or off.
+
+Design rules (step1_brief_cost_engine_v2.md): pure functions, no I/O,
+deterministic, full float precision (rounding is the display layer's job).
+A division by zero, which Excel shows as #DIV/0!, is returned as ``None``.
 """
 
 from __future__ import annotations
@@ -24,6 +24,23 @@ COMPANIES = ("EZDK", "EFS", "ERM", "ESR")
 BILLET_PRODUCERS = ("EZDK", "EFS", "ESR")
 HRC_PRODUCERS = ("EZDK", "EFS")
 PRODUCTS = ("Rebar", "Wire Rod", "HRC")
+
+# Each rule switches one correction on.  Names refer to MODEL_FIXES.md.
+RULES = {
+    "export_expense_per_ton": "A1  export expenses are $/t × export volume, not a lump sum",
+    "consistent_volumes": "A2/A3/B6  every export is produced, priced and ×12 in annual views",
+    "erm_dri_full_volume": "A4  ERM DRI volume includes the DRI it supplies to EFS's flat line",
+    "market_share_hrc": "A5  HRC group sales = EZDK + EFS HRC local sales",
+    "billet_interco": "B1  ERM's internal billet purchase raises the supplier's production "
+                      "and is booked as an intercompany sale",
+    "erm_dri_pnl": "B2  ERM's DRI sales get their own P&L column; fixed costs follow the "
+                   "distribution %; intercompany sales are eliminated on consolidation",
+    "break_even_on_cm": "B4  break-even = (fixed + depreciation) ÷ contribution margin per ton",
+    "own_line_inputs": "B5  each line uses its own electricity price and one DRI margin per buyer",
+    "summary_from_detail": "C   summary cost sheets equal the detailed build-up",
+}
+CORRECTED_RULES = {name: True for name in RULES}
+LEGACY_RULES = {name: False for name in RULES}
 
 
 class IntegrityError(ValueError):
@@ -210,10 +227,9 @@ def compute_integrated_detail(p: dict, link: dict) -> dict:
         "s1.solid_charge_t": sc, "s1.byproduct_t": byp_t,
         "s1.electricity_eaf_lf_kwh": link["eaf_lf_kwh"], "s1.electricity_usd_kwh": elec,
     })
-    for k in ("imported", "local", "dri"):
+    for k in blend:
         o[f"s1.blend.{k}"] = blend[k]
         o[f"s1.price.{k}"] = price[k]
-    for k in blend:
         o[f"s1.t.{k}"] = tons[k]
     cost1 = {f"material.{k}": tons[k] * price[k] / ms for k in blend}
     cost1["byproduct"] = byp_t * p1["byproduct_t"] / ms
@@ -334,13 +350,13 @@ def compute_integrated_detail(p: dict, link: dict) -> dict:
 
 def compute_esr_stage1(p: dict, link: dict, fx: float) -> dict:
     """Billet build-up.  link: finished_t, s3_yield, eaf_yield, bccm_yield, blend, price,
-    electricity_usd_kwh, eaf_lf_kwh."""
+    electricity_usd_kwh, eaf_lf_kwh, and optionally extra_feed_t (billets sold to others)."""
     s1, s3 = p["stage1"], p["stage3"]
     c1, p1 = s1["consumption"], s1["prices_usd"]
     u = lambda v: _usd(v, fx)
     fin = link["finished_t"]
     sh = s3["feed_share"]
-    feed_prod = fin / link["s3_yield"] * sh["produced"]
+    feed_prod = fin / link["s3_yield"] * sh["produced"] + link.get("extra_feed_t", 0.0)
     y = link["eaf_yield"] * link["bccm_yield"]
     sc = feed_prod / y
     blend = {"imported": link["blend"]["imported"], "local": link["blend"]["local"],
@@ -356,10 +372,9 @@ def compute_esr_stage1(p: dict, link: dict, fx: float) -> dict:
                "s1.eaf_yield": link["eaf_yield"], "s1.bccm_yield": link["bccm_yield"],
                "s1.yield": y, "s1.solid_charge_t": sc, "s1.byproduct_t": byp_t,
                "s1.electricity_kwh": elec_kwh, "s1.electricity_usd_kwh": elec}
-    for k in ("imported", "local", "dri"):
+    for k in blend:
         o[f"s1.blend.{k}"] = blend[k]
         o[f"s1.price.{k}"] = price[k]
-    for k in blend:
         o[f"s1.t.{k}"] = tons[k]
     prices = {k: u(p1[k]) for k in ("byproduct_t", "aux_materials_kg", "refractories_kg",
                                     "electrodes_kg", "consumables_kg", "natural_gas_nm3",
@@ -507,6 +522,9 @@ def compute_rolling_detail(p: dict, link: dict, fx: float) -> dict:
 # 'Billet' summary sheet and trade-off matrix
 # --------------------------------------------------------------------------- #
 
+CHARGE = ("imported", "local", "dri", "home", "pig")
+
+
 def _billet_inputs(state: dict, company: str) -> dict:
     b = state["billet"]["companies"][company]
     out = dict(b)
@@ -516,24 +534,50 @@ def _billet_inputs(state: dict, company: str) -> dict:
     return out
 
 
-def compute_billet_summary(state: dict, dri_vc: dict, other_conversion: dict) -> dict:
-    """'Billet' rows 8–30 + trade-off matrix (rows 35–52)."""
+def _dri_margin(state: dict, buyer: str, line: str, rules: dict) -> float:
+    """ERM → buyer DRI margin ($/t).  The legacy workbook keeps a second copy of the
+    EFS margin on the 'Flat' sheet; corrected, one margin per buyer serves both lines."""
+    if line == "flat" and not rules["own_line_inputs"] and "dri_margin_from_erm_usd_t" in state["flat"][buyer]:
+        return state["flat"][buyer]["dri_margin_from_erm_usd_t"]
+    return state["billet"]["companies"][buyer]["dri_margin_from_erm_usd_t"]
+
+
+def _summary_from_detail(d: dict, vc: float, combined_yield: float) -> dict:
+    """Rulebook §4.4: Material = Σ blend × price; Yield Effect = Material × (1/yield − 1);
+    Other Conversion = Total VC − Material − Yield Effect, with VC from the detail sheet."""
+    mat = sum(d[f"s1.blend.{k}"] * d[f"s1.price.{k}"] for k in CHARGE)
+    yld = mat * (1 / combined_yield - 1)
+    return {"material_price": mat, "yield_effect": yld, "other_conversion": vc - mat - yld,
+            "total_conversion": vc - mat, "total_variable_cost": vc}
+
+
+def compute_billet_summary(state: dict, dri_vc: dict, rules: dict, detail: dict) -> dict:
+    """'Billet' rows 8–30 + trade-off matrix (rows 35–52).  ``detail`` maps each producer
+    to its billet build-up (EZDK/EFS Rebar sheet, ESR stage 1)."""
     out: dict = {"_currency": "USD"}
     for co in BILLET_PRODUCERS:
         b = _billet_inputs(state, co)
+        d = detail[co]
         dri_price = dri_vc["EZDK"] if co == "EZDK" else dri_vc["ERM"] + b["dri_margin_from_erm_usd_t"]
-        bl = b["blend_pct"]
-        mat = (dri_price * _pct(bl["dri"]) + b["local_scrap_usd_t"] * _pct(bl["local_scrap"])
-               + b["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
-        k = 1 / (_pct(b["eaf_yield_pct"]) * _pct(b["ccp_yield_pct"])) - 1
-        yld = (k * dri_price * _pct(bl["dri"]) + k * b["local_scrap_usd_t"] * _pct(bl["local_scrap"])
-               + k * b["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
-        oc = other_conversion[co]
-        out[co] = {"dri_price": dri_price, "local_scrap_price": b["local_scrap_usd_t"],
-                   "imported_scrap_price": b["imported_scrap_usd_t"],
-                   "billet_yield_pct": b["ccp_yield_pct"] * b["eaf_yield_pct"] / 100,
-                   "material_price": mat, "yield_effect": yld, "other_conversion": oc,
-                   "total_conversion": yld + oc, "total_variable_cost": yld + oc + mat}
+        row = {"dri_price": dri_price, "local_scrap_price": b["local_scrap_usd_t"],
+               "imported_scrap_price": b["imported_scrap_usd_t"],
+               "billet_yield_pct": b["ccp_yield_pct"] * b["eaf_yield_pct"] / 100}
+        if rules["summary_from_detail"]:
+            if co == "ESR":
+                row.update(_summary_from_detail(d, d["s1.billet_variable_cost"], d["s1.yield"]))
+            else:
+                row.update(_summary_from_detail(d, d["s2.variable_cost"], d["s1.yield"] * d["s2.yield"]))
+        else:
+            bl = b["blend_pct"]
+            mat = (dri_price * _pct(bl["dri"]) + b["local_scrap_usd_t"] * _pct(bl["local_scrap"])
+                   + b["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
+            k = 1 / (_pct(b["eaf_yield_pct"]) * _pct(b["ccp_yield_pct"])) - 1
+            yld = (k * dri_price * _pct(bl["dri"]) + k * b["local_scrap_usd_t"] * _pct(bl["local_scrap"])
+                   + k * b["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
+            oc = d["summary.other_conversion"]
+            row.update({"material_price": mat, "yield_effect": yld, "other_conversion": oc,
+                        "total_conversion": yld + oc, "total_variable_cost": yld + oc + mat})
+        out[co] = row
     m = state["billet"]["market_usd_t"]
     market = m["base"] + m["safe_guards"] + m["other_costs"]
     out["market_price"] = market
@@ -544,7 +588,8 @@ def compute_billet_summary(state: dict, dri_vc: dict, other_conversion: dict) ->
 
 def compute_tradeoff_matrix(state: dict, vc: dict, market: float) -> dict:
     """Seller VC × seller trade-off ratio; the seller's own column is its plain VC.
-    Constant cells in the workbook matrix are carried as overrides."""
+    Constant cells typed into the workbook matrix arrive as overrides (the corrected
+    baseline has none; integrity check ``no_hardcoded_results`` reports any)."""
     b = state["billet"]["companies"]
     rows = {}
     for src in BILLET_PRODUCERS:
@@ -553,19 +598,24 @@ def compute_tradeoff_matrix(state: dict, vc: dict, market: float) -> dict:
         rows[src].update(state["billet"].get("tradeoff_overrides", {}).get(src, {}))
     rows["Market"] = {buyer: market for buyer in COMPANIES}
     minimum = {buyer: min(rows[r][buyer] for r in rows) for buyer in COMPANIES}
-    return {"_currency": "USD", "rows": rows, "minimum": minimum}
+    cheapest = {buyer: min(rows, key=lambda r: rows[r][buyer]) for buyer in COMPANIES}
+    return {"_currency": "USD", "rows": rows, "minimum": minimum, "cheapest_source": cheapest}
 
 
-def _resolve_billet_source(source: str, billet: dict) -> float:
+def resolve_billet_source(source: str, billet: dict) -> tuple:
+    """ERM's billet source → (price $/t, supplying company or None for market).
+    'market' | 'min' (cheapest row of the trade-off matrix) | 'offer:<CO>' (that
+    company's intercompany price) | 'vc:<CO>' (that company's VC, i.e. at cost)."""
     if source == "market":
-        return billet["market_price"]
+        return billet["market_price"], None
     if source == "min":
-        return billet["tradeoff"]["minimum"]["ERM"]
+        src = billet["tradeoff"]["cheapest_source"]["ERM"]
+        return billet["tradeoff"]["minimum"]["ERM"], (None if src == "Market" else src)
     kind, co = source.split(":")
     if kind == "vc":
-        return billet[co]["total_variable_cost"]
+        return billet[co]["total_variable_cost"], co
     if kind == "offer":
-        return billet["tradeoff"]["rows"][co]["ERM"]
+        return billet["tradeoff"]["rows"][co]["ERM"], co
     raise ValueError(f"unknown billet source {source!r}")
 
 
@@ -584,21 +634,26 @@ def _finished_summary(material_sc1, market, yield_pct, home_scrap, other_conv):
     return {"sc1": s1, "sc2": s2, "difference": s1["total_variable_cost"] - s2["total_variable_cost"]}
 
 
-def compute_flat_summary(state: dict, dri_vc: dict, other_conversion: dict) -> dict:
+def compute_flat_summary(state: dict, dri_vc: dict, rules: dict, detail: dict) -> dict:
     out: dict = {"_currency": "USD"}
     for co in HRC_PRODUCERS:
         f = state["flat"][co]
-        dri_price = dri_vc["EZDK"] if co == "EZDK" else dri_vc["ERM"] + f["dri_margin_from_erm_usd_t"]
-        bl = f["blend_pct"]
-        mat = (dri_price * _pct(bl["dri"]) + f["local_scrap_usd_t"] * _pct(bl["local_scrap"])
-               + f["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
-        k = 1 / (_pct(f["eaf_yield_pct"]) * _pct(f["tsc_yield_pct"]) * _pct(f["hsm_yield_pct"])) - 1
-        yld = (k * dri_price * _pct(bl["dri"]) + k * f["local_scrap_usd_t"] * _pct(bl["local_scrap"])
-               + k * f["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
-        oc = other_conversion[co]
-        out[co] = {"dri_price": dri_price, "material_price": mat, "yield_effect": yld,
-                   "other_conversion": oc, "total_conversion": yld + oc,
-                   "total_variable_cost": yld + oc + mat}
+        d = detail[co]
+        dri_price = dri_vc["EZDK"] if co == "EZDK" else dri_vc["ERM"] + _dri_margin(state, co, "flat", rules)
+        if rules["summary_from_detail"]:
+            row = _summary_from_detail(d, d["s3.variable_cost"],
+                                       d["s1.yield"] * d["s2.yield"] * d["s3.yield"])
+        else:
+            bl = f["blend_pct"]
+            mat = (dri_price * _pct(bl["dri"]) + f["local_scrap_usd_t"] * _pct(bl["local_scrap"])
+                   + f["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
+            k = 1 / (_pct(f["eaf_yield_pct"]) * _pct(f["tsc_yield_pct"]) * _pct(f["hsm_yield_pct"])) - 1
+            yld = (k * dri_price * _pct(bl["dri"]) + k * f["local_scrap_usd_t"] * _pct(bl["local_scrap"])
+                   + k * f["imported_scrap_usd_t"] * _pct(bl["imported_scrap"]))
+            oc = d["summary.other_conversion"]
+            row = {"material_price": mat, "yield_effect": yld, "other_conversion": oc,
+                   "total_conversion": yld + oc, "total_variable_cost": yld + oc + mat}
+        out[co] = {"dri_price": dri_price, **row}
     return out
 
 
@@ -606,33 +661,37 @@ def compute_flat_summary(state: dict, dri_vc: dict, other_conversion: dict) -> d
 # 'Market Share', 'Production Requirments', 'Fixed Cost'
 # --------------------------------------------------------------------------- #
 
-def compute_market_share(state: dict) -> dict:
+def _pct_of(a, b):
+    v = _div(a, b)
+    return None if v is None else v * 100
+
+
+def compute_market_share(state: dict, rules: dict) -> dict:
     s, mkt = state["sales"], state["total_local_market_kt"]
     rebar = {co: s[co]["Rebar"]["local_kt"] for co in COMPANIES}
-    grp_rebar = sum(rebar.values())
-    grp_wire = s["EZDK"]["Wire Rod"]["local_kt"]
-    # 'Market Share'!G11 = SUM(G22:G23) — sums the market-size cells (see MODEL_QUIRKS.md)
-    grp_hrc = mkt["HRC"] or 0.0
-    share_r = _div(grp_rebar, mkt["Rebar"])
-    share_w = _div(grp_wire, mkt["Wire Rod"])
+    hrc = {co: s[co]["HRC"]["local_kt"] for co in HRC_PRODUCERS}
+    grp = {"Rebar": sum(rebar.values()), "Wire Rod": s["EZDK"]["Wire Rod"]["local_kt"]}
+    if rules["market_share_hrc"]:
+        grp["HRC"] = sum(hrc.values())
+    else:  # 'Market Share'!G11 = SUM(G22:G23): sums the market-size cells
+        grp["HRC"] = mkt["HRC"] or 0.0
+    share = {p: _pct_of(grp[p], mkt[p]) for p in ("Rebar", "Wire Rod")}
+    if rules["market_share_hrc"]:
+        share["HRC"] = _pct_of(grp["HRC"], mkt["HRC"])
     return {
         "_currency": "none",
-        "group_local_kt": {"Rebar": grp_rebar, "Wire Rod": grp_wire, "HRC": grp_hrc},
-        "ezz_share_pct": {"Rebar": None if share_r is None else share_r * 100,
-                          "Wire Rod": None if share_w is None else share_w * 100},
-        "others_share_pct": {"Rebar": None if share_r is None else 100 - share_r * 100,
-                             "Wire Rod": None if share_w is None else 100 - share_w * 100},
+        "group_local_kt": grp,
+        "ezz_share_pct": share,
+        "others_share_pct": {p: None if v is None else 100 - v for p, v in share.items()},
         "company_pct_of_group": {
-            "Rebar": {co: (None if _div(rebar[co], grp_rebar) is None
-                           else _div(rebar[co], grp_rebar) * 100) for co in COMPANIES},
-            "Wire Rod": {"EZDK": None if _div(grp_wire, grp_wire) is None else _div(grp_wire, grp_wire) * 100},
-            "HRC": {co: (None if _div(s[co]["HRC"]["local_kt"], grp_hrc) is None
-                         else _div(s[co]["HRC"]["local_kt"], grp_hrc) * 100) for co in HRC_PRODUCERS},
+            "Rebar": {co: _pct_of(rebar[co], grp["Rebar"]) for co in COMPANIES},
+            "Wire Rod": {"EZDK": _pct_of(grp["Wire Rod"], grp["Wire Rod"])},
+            "HRC": {co: _pct_of(hrc[co], grp["HRC"]) for co in HRC_PRODUCERS},
         },
     }
 
 
-def compute_production(state: dict, det: dict) -> dict:
+def compute_production(state: dict, det: dict, rules: dict, erm_supplier) -> dict:
     """'Production Requirments' — sales-driven cascade, in Ktons."""
     k = 1000.0
     ez, efs, esr = det["EZDK Rebar"], det["EFS Rebar"], det["ESR Rebar"]
@@ -673,8 +732,14 @@ def compute_production(state: dict, det: dict) -> dict:
     flat["EZDK"]["iop"] = flat["EZDK"]["dri"] * mrmr_ez
     flat["ERM"] = {"mrmr": mrmr_erm, "iop": flat["EFS"]["dri"] * mrmr_erm}
 
+    # ERM buys its billets; corrected, they are not counted as group production again
+    # (an internal purchase is already inside the supplier's billet figure).
+    produced_only = rules["billet_interco"]
+    long["ERM"]["billet_source"] = erm_supplier or "market"
+
     def tot(section, key):
-        return sum(v.get(key, 0.0) for v in section.values())
+        return sum(v.get(key, 0.0) for c, v in section.items()
+                   if not (produced_only and key == "billet" and c == "ERM"))
 
     long_tot = {key: tot(long, key) for key in ("rebar", "wire_rod", "billet", "molten_steel",
                                                 "solid_charge", "dri", "imported_scrap",
@@ -746,135 +811,214 @@ PNL_VARIANTS = {
     "le_annual": ("P&L LE Annual", True, True),
 }
 
-# column, company, product, detail sheet supplying VC, fixed-cost source
-_PNL_COLS = (
-    ("E", "EZDK", "Rebar"), ("F", "EZDK", "Wire Rod"), ("G", "EZDK", "HRC"),
-    ("J", "EFS", "Rebar"), ("K", "EFS", "HRC"), ("N", "ERM", "Rebar"), ("P", "ESR", "Rebar"),
-)
-_PNL_GROUPS = (("H", ("E", "F", "G")), ("L", ("J", "K")))
+# workbook column letter → P&L column key
+PNL_COLUMN_LETTERS = {
+    "E": "EZDK/Rebar", "F": "EZDK/Wire Rod", "G": "EZDK/HRC", "H": "EZDK/Sub-Total",
+    "J": "EFS/Rebar", "K": "EFS/HRC", "L": "EFS/Sub-Total", "N": "ERM/Rebar",
+    "P": "ESR/Rebar", "R": "Total",
+}
+
+_PRODUCT_LINES = (("EZDK", "Rebar"), ("EZDK", "Wire Rod"), ("EZDK", "HRC"), ("EFS", "Rebar"),
+                  ("EFS", "HRC"), ("ERM", "Rebar"), ("ESR", "Rebar"))
 
 
-def compute_pnl(state: dict, det: dict, fixed: dict, variant: str) -> dict:
+def _variable_cost_per_t(det: dict, co: str, prod: str, in_le: bool, fx: float) -> float:
+    if (co, prod) in (("EZDK", "Wire Rod"), ("ERM", "Rebar")):
+        d = det["EZDK Wire" if prod == "Wire Rod" else "ERM Rolling"]
+        return d["variable_cost_le_t"] if in_le else d["variable_cost_usd_t"]
+    sheet = {("EZDK", "Rebar"): "EZDK Rebar", ("EZDK", "HRC"): "EZDK Flat",
+             ("EFS", "Rebar"): "EFS Rebar", ("EFS", "HRC"): "EFS Flat",
+             ("ESR", "Rebar"): "ESR Rebar"}[(co, prod)]
+    return det[sheet]["s3.variable_cost"] * (fx if in_le else 1.0)
+
+
+def compute_pnl(state: dict, det: dict, fixed: dict, variant: str, rules: dict, interco: dict) -> dict:
     sheet, in_le, annual = PNL_VARIANTS[variant]
     fx = state["fx_egp_per_usd"]
     cur = fx if in_le else 1.0
     mult = 12.0 if annual else 1.0
     s = state["sales"]
-    rates = state["pnl"]["export_expense_rate"]
+    cv = rules["consistent_volumes"]
     alloc = fixed["allocation_usd_m"]
     cols: dict = {}
-    vc_source = {
-        "E": det["EZDK Rebar"]["s3.variable_cost"] * cur,
-        "F": det["EZDK Wire"]["variable_cost_le_t"] if in_le else det["EZDK Wire"]["variable_cost_usd_t"],
-        "G": det["EZDK Flat"]["s3.variable_cost"] * cur,
-        "J": det["EFS Rebar"]["s3.variable_cost"] * cur,
-        "K": det["EFS Flat"]["s3.variable_cost"] * cur,
-        "N": det["ERM Rolling"]["variable_cost_le_t"] if in_le else det["ERM Rolling"]["variable_cost_usd_t"],
-        "P": det["ESR Rebar"]["s3.variable_cost"] * cur,
-    }
-    for col, co, prod in _PNL_COLS:
+    for co, prod in _PRODUCT_LINES:
         sl = s[co][prod]
         local_q = sl["local_kt"] * mult
-        # export quantities as wired in each sheet (see MODEL_QUIRKS.md)
-        if col in ("N", "P"):
+        if cv:
+            export_q = sl["export_kt"] * mult
+        elif co in ("ERM", "ESR"):
             export_q = 0.0
-        elif col == "J" or (col == "E" and variant == "le_annual"):
-            export_q = sl["export_kt"]
+        elif (co, prod) == ("EFS", "Rebar") or ((co, prod) == ("EZDK", "Rebar") and variant == "le_annual"):
+            export_q = sl["export_kt"]           # the workbook forgets ×12 here
         else:
             export_q = sl["export_kt"] * mult
         qty = local_q + export_q
         local_price = sl["local_price_le_t"] if in_le else sl["local_price_le_t"] / fx
-        local_val = local_price * (qty if col == "P" else local_q) / 1000
-        if col in ("J", "N", "P"):
-            export_price, export_val = 0.0, 0.0
+        local_val = local_price * (qty if (co == "ESR" and not cv) else local_q) / 1000
+        if not cv and (co, prod) in (("EFS", "Rebar"), ("ERM", "Rebar"), ("ESR", "Rebar")):
+            export_price, export_val = 0.0, 0.0  # hardcoded 0 in the workbook
         else:
             export_price = sl["export_price_usd_t"] * cur
             export_val = export_price * export_q / 1000
-        total = local_val + export_val
-        vc = vc_source[col]
-        cogs = vc * qty / 1000
-        exp_rate = rates[co][prod] * cur * mult
-        cm = total - cogs - exp_rate
-        gain = state["pnl"]["intercompany_gain_dri_musd"].get("ERM", 0.0) * cur * mult if col == "N" else None
-        if co == "ERM":          # ERM carries the whole company's fixed cost
+        vc = _variable_cost_per_t(det, co, prod, in_le, fx)
+        if rules["export_expense_per_ton"]:
+            exp = export_q * state["pnl"]["export_expense_usd_t"][co][prod] * cur / 1000
+        else:                                     # the workbook subtracts the typed figure as M$
+            exp = state["pnl"].get("export_expense_rate", {}).get(co, {}).get(prod, 0.0) * cur * mult
+        gain = None
+        if co == "ERM" and not rules["erm_dri_pnl"]:
+            gain = state["pnl"].get("intercompany_gain_dri_musd", {}).get("ERM", 0.0) * cur * mult
             fl = {line: fixed["usd_m"]["ERM"][line] for line, _ in _FIXED_LINES}
         else:
             fl = dict(alloc[prod][co])
-        if co == "ESR":          # ESR depreciation comes from the company total
-            fl["depreciation"] = fixed["usd_m"]["ESR"]["depreciation"]
+            if co == "ESR" and not rules["erm_dri_pnl"]:
+                fl["depreciation"] = fixed["usd_m"]["ESR"]["depreciation"]
         fl = {k: v * cur * mult for k, v in fl.items()}
-        cols[col] = _pnl_column(local_q, export_q, local_val, local_price, export_val, export_price,
-                                cogs, vc, exp_rate, cm, gain, fl)
-        cols[col]["company"], cols[col]["product"] = co, prod
-    for g, members in _PNL_GROUPS:
-        cols[g] = _pnl_subtotal([cols[c] for c in members])
-    cols["L"]["export_price"] = 0.0
-    cols["L"]["export_expenses"] = cols["K"]["export_expenses"]
-    cols["R"] = _pnl_subtotal([cols[c] for c in ("P", "L", "H", "N")])
-    cols["R"]["intercompany_gain_dri"] = cols["N"]["intercompany_gain_dri"]
-    if annual and not in_le:
-        for c in cols.values():          # row 42 exists only on 'P&L $ Annual'
-            c["depreciation_per_t"] = _div(c["depreciation"] * 1000, c["total_qty"])
+        c = _pnl_column(local_q, export_q, local_val, local_price, export_val, export_price,
+                        qty * vc / 1000, vc, exp, gain, fl, rules)
+        c.update(company=co, product=prod, intercompany=False)
+        cols[f"{co}/{prod}"] = c
+
+    for key, x in interco.items():               # intercompany sales (corrected model)
+        fl = {k: v * cur * mult for k, v in x["fixed_usd_m"].items()}
+        q = x["qty_kt"] * mult
+        rev = x["revenue_usd_m"] * cur * mult
+        cogs = x["cogs_usd_m"] * cur * mult
+        c = _pnl_column(q, 0.0, rev, _div(rev * 1000, q), 0.0, 0.0, cogs,
+                        _div(cogs * 1000, q), 0.0, None, fl, rules)
+        c.update(company=x["seller"], product=x["product"], intercompany=True,
+                 buyers=x["buyers"])
+        cols[key] = c
+
+    for co in COMPANIES:
+        members = [c for c in cols.values() if c["company"] == co and "product" in c]
+        if members:
+            cols[f"{co}/Sub-Total"] = _pnl_subtotal(members, rules)
+            cols[f"{co}/Sub-Total"].update(company=co)
+    if not cv:   # 'P&L $ Monthly'!L14 is a hardcoded 0 and L21 = K21
+        cols["EFS/Sub-Total"]["export_price"] = 0.0
+        cols["EFS/Sub-Total"]["export_expenses"] = cols["EFS/HRC"]["export_expenses"]
+    cols["Total"] = _pnl_subtotal([cols[f"{co}/Sub-Total"] for co in COMPANIES
+                                   if f"{co}/Sub-Total" in cols], rules)
+    cols["Total"]["intercompany_gain_dri"] = cols["ERM/Rebar"]["intercompany_gain_dri"]
+    for c in cols.values():                      # row 42 ('P&L $ Annual' only in the workbook)
+        c["depreciation_per_t"] = _div(c["depreciation"] * 1000, c["total_qty"])
     return {"_currency": "LE" if in_le else "USD", "sheet": sheet, "columns": cols}
 
 
-def _pnl_column(lq, eq, lv, lp, ev, ep, cogs, vc, exp, cm, gain, fl):
+def _pnl_column(lq, eq, lv, lp, ev, ep, cogs, vc, exp, gain, fl, rules):
     qty = lq + eq
     total = lv + ev
-    avg = _div(total * 1000, qty)
+    cm = total - cogs - exp
     fixed_tot = fl["manufacturing"] + fl["sga"] + fl["net_finance"]
     ebtd = cm + (gain or 0.0) - fixed_tot
-    ebt = ebtd - fl["depreciation"]
     c = {"local_qty": lq, "export_qty": eq, "total_qty": qty, "local_value": lv, "local_price": lp,
-         "export_value": ev, "export_price": ep, "total_value": total, "avg_price": avg,
-         "variable_cogs": cogs, "cost_per_t": vc, "export_expenses": exp,
-         "contribution_margin": cm, "intercompany_gain_dri": gain,
+         "export_value": ev, "export_price": ep, "total_value": total,
+         "avg_price": _div(total * 1000, qty), "variable_cogs": cogs, "cost_per_t": vc,
+         "export_expenses": exp, "contribution_margin": cm, "intercompany_gain_dri": gain,
          "manufacturing_fixed": fl["manufacturing"], "sga": fl["sga"],
          "net_finance": fl["net_finance"], "total_fixed": fixed_tot, "ebtd": ebtd,
-         "depreciation": fl["depreciation"], "ebt": ebt}
-    return _pnl_ratios(c)
+         "depreciation": fl["depreciation"], "ebt": ebtd - fl["depreciation"]}
+    return _pnl_ratios(c, rules)
 
 
-def _pnl_ratios(c):
+def _per_t(v, q):
+    return _div(v * 1000, q) if v is not None else None
+
+
+def _pct_of_price(per_t, price):
+    return _div(per_t, price) and per_t / price * 100
+
+
+def _pnl_ratios(c, rules):
     q = c["total_qty"]
-    c["cm_per_t"] = _div(c["contribution_margin"] * 1000, q)
-    c["cm_pct"] = _div(c["cm_per_t"], c["avg_price"]) and c["cm_per_t"] / c["avg_price"] * 100
-    c["ebtd_per_t"] = _div(c["ebtd"], q) and c["ebtd"] / q * 1000
-    c["ebtd_pct"] = _div(c["ebtd_per_t"], c["avg_price"]) and c["ebtd_per_t"] / c["avg_price"] * 100
-    c["fc_per_t"] = _div((c["depreciation"] + c["total_fixed"]), q) and \
-        (c["depreciation"] + c["total_fixed"]) / q * 1000
-    c["ebt_per_t"] = _div(c["ebt"], q) and c["ebt"] / q * 1000
-    c["ebt_pct"] = _div(c["ebt_per_t"], c["avg_price"]) and c["ebt_per_t"] / c["avg_price"] * 100
+    c["cm_per_t"] = _per_t(c["contribution_margin"], q)
+    c["cm_pct"] = _pct_of_price(c["cm_per_t"], c["avg_price"])
+    c["ebtd_per_t"] = _per_t(c["ebtd"], q)
+    c["ebtd_pct"] = _pct_of_price(c["ebtd_per_t"], c["avg_price"])
+    c["fc_per_t"] = _per_t(c["depreciation"] + c["total_fixed"], q)
+    c["ebt_per_t"] = _per_t(c["ebt"], q)
+    c["ebt_pct"] = _pct_of_price(c["ebt_per_t"], c["avg_price"])
     c["vc_plus_fc_per_t"] = None if c["fc_per_t"] is None or c["cost_per_t"] is None \
         else c["cost_per_t"] + c["fc_per_t"]
-    # Break-even = 0 when nothing is sold (rulebook §8.2 / check 7; Excel shows #DIV/0!)
-    if q == 0:
+    fixed_all = c["total_fixed"] + c["depreciation"]
+    if q == 0:            # rulebook check 7 (Excel shows #DIV/0!)
         c["break_even_qty"] = 0.0
-    else:
+        c["cash_break_even_qty"] = 0.0
+    elif rules["break_even_on_cm"]:
+        # quantity at which CM covers the fixed costs; none if each ton loses money
+        cm_t = c["cm_per_t"]
+        c["break_even_qty"] = _div(fixed_all * 1000, cm_t) if cm_t and cm_t > 0 else None
+        c["cash_break_even_qty"] = _div(c["total_fixed"] * 1000, cm_t) if cm_t and cm_t > 0 else None
+    else:                 # workbook: (fixed + dep) ÷ (average price − VC per ton)
         margin = None if c["avg_price"] is None or c["cost_per_t"] is None \
             else c["avg_price"] - c["cost_per_t"]
-        c["break_even_qty"] = _div(c["total_fixed"] + c["depreciation"], margin) and \
-            (c["total_fixed"] + c["depreciation"]) / margin * 1000
+        c["break_even_qty"] = _div(fixed_all * 1000, margin)
+        c["cash_break_even_qty"] = None
     return c
 
 
-def _pnl_subtotal(parts):
-    add = lambda k: sum(p[k] for p in parts)
-    c = {k: add(k) for k in ("local_qty", "export_qty", "total_qty", "local_value", "export_value",
-                             "total_value", "variable_cogs", "export_expenses",
-                             "contribution_margin", "manufacturing_fixed", "sga", "net_finance",
-                             "total_fixed", "ebtd", "depreciation", "ebt")}
+_ADDITIVE = ("local_qty", "export_qty", "total_qty", "local_value", "export_value", "total_value",
+             "variable_cogs", "export_expenses", "contribution_margin", "manufacturing_fixed",
+             "sga", "net_finance", "total_fixed", "ebtd", "depreciation", "ebt")
+
+
+def _pnl_subtotal(parts, rules):
+    c = {k: sum(p[k] for p in parts) for k in _ADDITIVE}
     c["intercompany_gain_dri"] = None
-    c["local_price"] = _div(c["local_value"], c["local_qty"]) and c["local_value"] / c["local_qty"] * 1000
-    c["export_price"] = _div(c["export_value"], c["export_qty"]) and c["export_value"] / c["export_qty"] * 1000
-    c["avg_price"] = _div(c["total_value"], c["total_qty"]) and c["total_value"] / c["total_qty"] * 1000
-    c["cost_per_t"] = _div(c["variable_cogs"], c["total_qty"]) and c["variable_cogs"] / c["total_qty"] * 1000
-    return _pnl_ratios(c)
+    c["local_price"] = _per_t(c["local_value"], c["local_qty"])
+    c["export_price"] = _per_t(c["export_value"], c["export_qty"])
+    c["avg_price"] = _per_t(c["total_value"], c["total_qty"])
+    c["cost_per_t"] = _per_t(c["variable_cogs"], c["total_qty"])
+    return _pnl_ratios(c, rules)
+
+
+def compute_consolidated(pnl: dict, rules: dict) -> dict:
+    """Group P&L: each company's sub-total, an explicit eliminations column, and the
+    consolidated figures (rulebook §8.4–8.6).  Buyers' COGS carry intercompany
+    purchases at transfer price, so eliminating the intercompany revenue from both
+    revenue and COGS leaves the contribution margin unchanged."""
+    cols = pnl["columns"]
+    companies = {co: cols[f"{co}/Sub-Total"] for co in COMPANIES if f"{co}/Sub-Total" in cols}
+    interco = [c for c in cols.values() if c.get("intercompany")]
+    elim_rev = sum(c["total_value"] for c in interco)
+    elim_qty = sum(c["total_qty"] for c in interco)
+    lines = ("total_value", "variable_cogs", "export_expenses", "contribution_margin",
+             "manufacturing_fixed", "sga", "net_finance", "total_fixed", "ebtd",
+             "depreciation", "ebt")
+    elims = {k: 0.0 for k in lines}
+    elims["total_value"] = -elim_rev
+    elims["variable_cogs"] = -elim_rev
+    total = {k: sum(c[k] for c in companies.values()) for k in lines}
+    cons = {k: total[k] + elims[k] for k in lines}
+    ext_qty = sum(c["total_qty"] for c in companies.values()) - elim_qty
+    local_qty = sum(c["local_qty"] for c in cols.values()
+                    if "product" in c and not c.get("intercompany"))
+    local_val = sum(c["local_value"] for c in cols.values()
+                    if "product" in c and not c.get("intercompany"))
+    cons.update({
+        "external_sales_qty": ext_qty,
+        "local_qty": local_qty,
+        "local_value": local_val,
+        "avg_local_price": _per_t(local_val, local_qty),    # rulebook §8.5
+        "cm_pct": _pct_of_price(cons["contribution_margin"], cons["total_value"]),
+        "ebt_pct": _pct_of_price(cons["ebt"], cons["total_value"]),
+    })
+    return {"_currency": pnl["_currency"],
+            "companies": {co: {k: c[k] for k in lines} for co, c in companies.items()},
+            "eliminations": elims, "consolidated": cons,
+            "intercompany_sales": {k: {"seller": c["company"], "product": c["product"],
+                                       "qty": c["total_qty"], "revenue": c["total_value"]}
+                                   for k, c in cols.items() if c.get("intercompany")}}
 
 
 # --------------------------------------------------------------------------- #
 # Integrity checks (rulebook §12, brief §4.7)
 # --------------------------------------------------------------------------- #
+
+def _close(a, b, tol=1e-9):
+    return a is not None and b is not None and abs(a - b) <= tol * max(1.0, abs(a), abs(b))
+
 
 def _check_fixed_distribution_sums(state):
     bad = {co: sum(state["fixed_cost"][co]["distribution_pct"].values()) for co in COMPANIES}
@@ -884,23 +1028,34 @@ def _check_fixed_distribution_sums(state):
 
 
 def _check_blending_ratios_sum(state):
+    """DRI + local + imported scrap (summary sheets) + home scrap + pig iron (detail
+    sheets, stored as fractions) must make 100% of the charge on every line."""
     bad = {}
-    for co in BILLET_PRODUCERS:
-        bl = state["billet"]["companies"][co]["blend_pct"]
-        t = sum(bl.values())
+    lines = [(f"{co} long", state["billet"]["companies"][co]["blend_pct"], f"{co} Rebar")
+             for co in BILLET_PRODUCERS]
+    lines += [(f"{co} flat", state["flat"][co]["blend_pct"], f"{co} Flat") for co in HRC_PRODUCERS]
+    for name, bl, sheet in lines:
+        extra = state["detail"][sheet]["stage1"]["blend_pct"]
+        t = sum(bl.values()) + 100 * (extra["home_scrap"] + extra["pig_iron"])
         if abs(t - 100) > 0.01:
-            bad[f"{co} long"] = round(t, 4)
-    for co in HRC_PRODUCERS:
-        t = sum(state["flat"][co]["blend_pct"].values())
-        if abs(t - 100) > 0.01:
-            bad[f"{co} flat"] = round(t, 4)
+            bad[name] = round(t, 4)
     return (not bad, "blending ratios sum to 100% on every line" if not bad
             else f"blending ratios do not sum to 100%: {bad}")
 
 
+def _check_no_hardcoded_results(state, rules):
+    found = []
+    for src, row in state["billet"].get("tradeoff_overrides", {}).items():
+        found += [f"trade-off matrix {src}→{buyer} typed as {v}" for buyer, v in row.items()]
+    gain = state["pnl"].get("intercompany_gain_dri_musd", {}).get("ERM", 0.0)
+    if gain and not rules["erm_dri_pnl"]:
+        found.append(f"ERM DRI intercompany gain typed as {gain} M$")
+    return (not found, "no typed-in results" if not found else "typed-in results: " + "; ".join(found))
+
+
 def _check_currency_consistency(outputs):
     bad = [k for k, v in outputs.items()
-           if isinstance(v, dict) and k != "integrity" and v.get("_currency") not in ("USD", "LE", "none")
+           if isinstance(v, dict) and v.get("_currency") not in ("USD", "LE", "none")
            and not all(isinstance(x, dict) and x.get("_currency") in ("USD", "LE", "none")
                        for x in v.values())]
     return (not bad, "every output view declares its currency" if not bad
@@ -913,15 +1068,57 @@ def _check_break_even_zero_when_no_sales(outputs):
     return (not bad, "break-even is 0 wherever sales are 0" if not bad else f"break-even ≠ 0: {bad}")
 
 
-def run_integrity_checks(state: dict, outputs: dict | None = None) -> list:
-    """Returns [(name, passed, detail)].  Checks 3, 4 and 6 hold by construction:
-    the matrix is computed on demand, every quantity is derived from sales, and the
-    DRI price EFS/ESR pay is ERM's DRI VC (+ margin) read from the same calculation."""
+def _check_intercompany_reconciliation(outputs, fx):
+    """Seller's intercompany revenue = cost the buyers carry for the same goods."""
+    det, cols = outputs["detail"], outputs["pnl"]["usd_monthly"]["columns"]
+    msgs, ok = [], True
+    if "ERM/DRI" in cols:
+        bought = sum(det[sh]["s1.t.dri"] * det[sh]["s1.price.dri"]
+                     for sh in ("EFS Rebar", "EFS Flat", "ESR Rebar")) / 1e6
+        sold = cols["ERM/DRI"]["total_value"]
+        ok &= _close(bought, sold)
+        msgs.append(f"DRI: ERM sold {sold:.4f} M$, EFS+ESR bought {bought:.4f} M$")
+    for key, c in cols.items():
+        if c.get("intercompany") and c["product"] == "Billet":
+            erm = det["ERM Rolling"]
+            bought = erm["t.produced"] * erm["price.produced_billet"] / fx / 1e6
+            ok &= _close(bought, c["total_value"])
+            msgs.append(f"billet: {c['company']} sold {c['total_value']:.4f} M$, ERM bought {bought:.4f} M$")
+    return ok, "; ".join(msgs) or "no intercompany sales"
+
+
+def _check_summary_matches_detail(outputs):
+    det, bad = outputs["detail"], []
+    pairs = [("billet EZDK", outputs["billet"]["EZDK"]["total_variable_cost"], det["EZDK Rebar"]["s2.variable_cost"]),
+             ("billet EFS", outputs["billet"]["EFS"]["total_variable_cost"], det["EFS Rebar"]["s2.variable_cost"]),
+             ("billet ESR", outputs["billet"]["ESR"]["total_variable_cost"], det["ESR Rebar"]["s1.billet_variable_cost"]),
+             ("HRC EZDK", outputs["flat"]["EZDK"]["total_variable_cost"], det["EZDK Flat"]["s3.variable_cost"]),
+             ("HRC EFS", outputs["flat"]["EFS"]["total_variable_cost"], det["EFS Flat"]["s3.variable_cost"]),
+             ("rebar EZDK", outputs["rebar"]["EZDK"]["sc1"]["total_variable_cost"], det["EZDK Rebar"]["s3.variable_cost"]),
+             ("rebar EFS", outputs["rebar"]["EFS"]["sc1"]["total_variable_cost"], det["EFS Rebar"]["s3.variable_cost"]),
+             ("rebar ESR", outputs["rebar"]["ESR"]["sc1"]["total_variable_cost"], det["ESR Rebar"]["s3.variable_cost"]),
+             ("rebar ERM", outputs["rebar"]["ERM"]["sc1"]["total_variable_cost"], det["ERM Rolling"]["variable_cost_usd_t"]),
+             ("wire EZDK", outputs["wire"]["EZDK"]["sc1"]["total_variable_cost"], det["EZDK Wire"]["variable_cost_usd_t"])]
+    bad = [f"{n}: summary {a:.4f} vs detail {b:.4f}" for n, a, b in pairs if not _close(a, b)]
+    return (not bad, "summary cost sheets equal the detailed build-up" if not bad
+            else "summary ≠ detail: " + "; ".join(bad))
+
+
+def run_integrity_checks(state: dict, outputs: dict | None = None, rules: dict | None = None) -> list:
+    """Returns [(name, passed, detail)].  Checks 3 and 4 hold by construction: the matrix
+    is computed on demand and every quantity is derived from sales."""
+    rules = rules or CORRECTED_RULES
     res = [("fixed_distribution_100", *_check_fixed_distribution_sums(state)),
-           ("blending_100", *_check_blending_ratios_sum(state))]
+           ("blending_100", *_check_blending_ratios_sum(state)),
+           ("no_hardcoded_results", *_check_no_hardcoded_results(state, rules))]
     if outputs is not None:
         res.append(("currency_tagged", *_check_currency_consistency(outputs)))
         res.append(("break_even_zero", *_check_break_even_zero_when_no_sales(outputs)))
+        if rules["erm_dri_pnl"] or rules["billet_interco"]:
+            res.append(("intercompany_reconciles",
+                        *_check_intercompany_reconciliation(outputs, state["fx_egp_per_usd"])))
+        if rules["summary_from_detail"]:
+            res.append(("summary_matches_detail", *_check_summary_matches_detail(outputs)))
     return res
 
 
@@ -929,22 +1126,38 @@ def run_integrity_checks(state: dict, outputs: dict | None = None) -> list:
 # Orchestration
 # --------------------------------------------------------------------------- #
 
-def compute_all(state: dict, strict: bool = False) -> dict:
+def rules_for(state: dict) -> dict:
+    return LEGACY_RULES if state.get("rules_profile") == "legacy" else CORRECTED_RULES
+
+
+def compute_all(state: dict, rules: dict | None = None, strict: bool = False) -> dict:
+    """Every view of the model.  ``rules`` defaults to the state's ``rules_profile``
+    (corrected unless the state says "legacy").  ``strict`` raises IntegrityError on the
+    first failed check."""
+    rules = {**(rules_for(state) if rules is None else rules)}
+    missing = set(RULES) - set(rules)
+    if missing:
+        raise ValueError(f"rules missing: {sorted(missing)}")
     fx = state["fx_egp_per_usd"]
     s = state["sales"]
     D = state["detail"]
+    cv = rules["consistent_volumes"]
+
+    def sold_t(co, prod, with_export=True):
+        x = s[co][prod]
+        return (x["local_kt"] + (x["export_kt"] if with_export else 0.0)) * 1000
 
     # Stage 1 — DRI variable cost
     dri_var = {co: compute_dri_variable(state, co) for co in ("EZDK", "ERM")}
     dri_vc = {co: dri_var[co]["summary_usd_t"]["total_variable_cost"] for co in dri_var}
 
-    # Stage 2 — detail sheets that feed the Billet / Flat summaries
+    # Stage 2 — billet producers' detail sheets
     bil = {co: _billet_inputs(state, co) for co in BILLET_PRODUCERS}
     dri_price = {"EZDK": dri_vc["EZDK"],
-                 "EFS": dri_vc["ERM"] + bil["EFS"]["dri_margin_from_erm_usd_t"],
-                 "ESR": dri_vc["ERM"] + bil["ESR"]["dri_margin_from_erm_usd_t"]}
+                 "EFS": dri_vc["ERM"] + _dri_margin(state, "EFS", "long", rules),
+                 "ESR": dri_vc["ERM"] + _dri_margin(state, "ESR", "long", rules)}
     fy = state["finishing_yield_pct"]
-    wire_t = (s["EZDK"]["Wire Rod"]["local_kt"] + s["EZDK"]["Wire Rod"]["export_kt"]) * 1000
+    wire_t = sold_t("EZDK", "Wire Rod")
     wire_billets = wire_t / _pct(fy["Wire Rod"]["EZDK"])
 
     def long_link(co, finished_t, extra):
@@ -962,9 +1175,8 @@ def compute_all(state: dict, strict: bool = False) -> dict:
 
     def flat_link(co):
         f = state["flat"][co]
-        hrc = s[co]["HRC"]
-        dp = dri_vc["EZDK"] if co == "EZDK" else dri_vc["ERM"] + f["dri_margin_from_erm_usd_t"]
-        return {"layout": "flat", "finished_t": (hrc["local_kt"] + hrc["export_kt"]) * 1000,
+        dp = dri_vc["EZDK"] if co == "EZDK" else dri_vc["ERM"] + _dri_margin(state, co, "flat", rules)
+        return {"layout": "flat", "finished_t": sold_t(co, "HRC"),
                 "extra_feed_t": 0.0, "eaf_yield": _pct(f["eaf_yield_pct"]),
                 "s2_yield": _pct(f["tsc_yield_pct"]), "s3_yield": _pct(f["hsm_yield_pct"]),
                 "blend": {"imported": _pct(f["blend_pct"]["imported_scrap"]),
@@ -972,23 +1184,17 @@ def compute_all(state: dict, strict: bool = False) -> dict:
                           "dri": _pct(f["blend_pct"]["dri"])},
                 "price": {"imported": f["imported_scrap_usd_t"], "local": f["local_scrap_usd_t"],
                           "dri": dp},
-                # both flat sheets read EZDK's billet electricity price ('Billet'!E11)
-                "electricity_usd_kwh": bil["EZDK"]["electricity_usd_kwh"],
+                # legacy: both flat sheets read EZDK's billet electricity price ('Billet'!E11)
+                "electricity_usd_kwh": (f["electricity_usd_kwh"] if rules["own_line_inputs"]
+                                        else bil["EZDK"]["electricity_usd_kwh"]),
                 "eaf_lf_kwh": f["eaf_lf_electricity_kwh_t_ms"]}
 
     def integrated(sheet, link):
         return _volume_safe(lambda t: compute_integrated_detail(D[sheet], {**link, "finished_t": t}),
                             link["finished_t"])
 
-    det = {
-        "EZDK Rebar": integrated("EZDK Rebar", long_link(
-            "EZDK", s["EZDK"]["Rebar"]["local_kt"] * 1000, wire_billets)),
-        "EFS Rebar": integrated("EFS Rebar", long_link("EFS", s["EFS"]["Rebar"]["local_kt"] * 1000, 0.0)),
-        "EZDK Flat": integrated("EZDK Flat", flat_link("EZDK")),
-        "EFS Flat": integrated("EFS Flat", flat_link("EFS")),
-    }
     b = bil["ESR"]
-    esr_link = {"finished_t": s["ESR"]["Rebar"]["local_kt"] * 1000, "s3_yield": _pct(fy["Rebar"]["ESR"]),
+    esr_link = {"finished_t": sold_t("ESR", "Rebar", cv), "s3_yield": _pct(fy["Rebar"]["ESR"]),
                 "eaf_yield": _pct(b["eaf_yield_pct"]), "bccm_yield": _pct(b["ccp_yield_pct"]),
                 "blend": {"imported": _pct(b["blend_pct"]["imported_scrap"]),
                           "local": _pct(b["blend_pct"]["local_scrap"]),
@@ -996,41 +1202,61 @@ def compute_all(state: dict, strict: bool = False) -> dict:
                 "price": {"imported": b["imported_scrap_usd_t"], "local": b["local_scrap_usd_t"],
                           "dri": dri_price["ESR"]},
                 "electricity_usd_kwh": b["electricity_usd_kwh"],
-                "eaf_lf_kwh": b["eaf_lf_electricity_kwh_t_ms"]}
-    esr_t = esr_link["finished_t"]
-    esr_s1 = lambda t: compute_esr_stage1(D["ESR Rebar"], {**esr_link, "finished_t": t}, fx)
-    esr1 = _volume_safe(esr_s1, esr_t)
+                "eaf_lf_kwh": b["eaf_lf_electricity_kwh_t_ms"], "extra_feed_t": 0.0}
 
-    billet = compute_billet_summary(state, dri_vc, {
-        "EZDK": det["EZDK Rebar"]["summary.other_conversion"],
-        "EFS": det["EFS Rebar"]["summary.other_conversion"],
-        "ESR": esr1["summary.other_conversion"]})
-    det["ESR Rebar"] = _volume_safe(
-        lambda t: compute_esr_stage3(D["ESR Rebar"], {**esr_link, "finished_t": t}, fx, esr_s1(t),
-                                     billet["ESR"]["total_variable_cost"]), esr_t)
+    def esr_stage1(link):
+        return _volume_safe(lambda t: compute_esr_stage1(D["ESR Rebar"], {**link, "finished_t": t}, fx),
+                            link["finished_t"])
 
-    erm_billet = _resolve_billet_source(state["sourcing"]["ERM_rebar_billet"], billet)
+    long_extra = {"EZDK": wire_billets, "EFS": 0.0}
+    det = {
+        "EZDK Rebar": integrated("EZDK Rebar", long_link("EZDK", sold_t("EZDK", "Rebar", cv), wire_billets)),
+        "EFS Rebar": integrated("EFS Rebar", long_link("EFS", sold_t("EFS", "Rebar", cv), 0.0)),
+        "EZDK Flat": integrated("EZDK Flat", flat_link("EZDK")),
+        "EFS Flat": integrated("EFS Flat", flat_link("EFS")),
+    }
+    esr1 = esr_stage1(esr_link)
+
+    billet = compute_billet_summary(state, dri_vc, rules, {
+        "EZDK": det["EZDK Rebar"], "EFS": det["EFS Rebar"], "ESR": esr1})
+
+    # ERM's billet source.  Per-ton costs do not depend on volume, so the supplier's
+    # sheet is re-run with the extra billets only to update its tonnages.
+    erm_price, erm_supplier = resolve_billet_source(state["sourcing"]["ERM_rebar_billet"], billet)
+
     def rolling(sheet, finished_t, yield_pct, billet_price):
         return _volume_safe(lambda t: compute_rolling_detail(
             D[sheet], {"finished_t": t, "yield": _pct(yield_pct), "billet_price_usd_t": billet_price},
             fx), finished_t)
 
-    det["ERM Rolling"] = rolling("ERM Rolling", s["ERM"]["Rebar"]["local_kt"] * 1000,
-                                 fy["Rebar"]["ERM"], erm_billet)
+    det["ERM Rolling"] = rolling("ERM Rolling", sold_t("ERM", "Rebar", cv), fy["Rebar"]["ERM"], erm_price)
+    erm_billets_t = det["ERM Rolling"]["t.produced"]
+    if rules["billet_interco"] and erm_supplier and erm_billets_t:
+        if erm_supplier == "ESR":
+            esr_link["extra_feed_t"] = erm_billets_t
+            esr1 = esr_stage1(esr_link)
+        else:
+            sheet = f"{erm_supplier} Rebar"
+            det[sheet] = integrated(sheet, long_link(erm_supplier, det[sheet]["finished_t"],
+                                                     long_extra[erm_supplier] + erm_billets_t))
+    det["ESR Rebar"] = _volume_safe(
+        lambda t: compute_esr_stage3(D["ESR Rebar"], {**esr_link, "finished_t": t}, fx,
+                                     esr_stage1({**esr_link, "finished_t": t}),
+                                     billet["ESR"]["total_variable_cost"]), esr_link["finished_t"])
     det["EZDK Wire"] = rolling("EZDK Wire", wire_t, fy["Wire Rod"]["EZDK"],
                                billet["EZDK"]["total_variable_cost"])
 
     # Stage 3 summaries
     market = billet["market_price"]
     rebar = {"_currency": "USD"}
+    full = rules["summary_from_detail"]
+    s3_other = ("refractories", "electricity", "natural_gas", "water", "work_roll")
     rebar_inputs = {
         "EZDK": (billet["EZDK"]["total_variable_cost"], det["EZDK Rebar"]["s3.cost.byproduct"],
-                 sum(det["EZDK Rebar"][f"s3.cost.{k}"] for k in
-                     ("refractories", "electricity", "natural_gas", "water", "work_roll"))),
+                 sum(det["EZDK Rebar"][f"s3.cost.{k}"] for k in s3_other)),
         "EFS": (billet["EFS"]["total_variable_cost"], det["EFS Rebar"]["s3.cost.byproduct"],
-                sum(det["EFS Rebar"][f"s3.cost.{k}"] for k in
-                    ("refractories", "electricity", "natural_gas", "water"))),
-        "ERM": (erm_billet, det["ERM Rolling"]["summary.home_scrap_usd_t"],
+                sum(det["EFS Rebar"][f"s3.cost.{k}"] for k in (s3_other if full else s3_other[:4]))),
+        "ERM": (erm_price, det["ERM Rolling"]["summary.home_scrap_usd_t"],
                 det["ERM Rolling"]["summary.other_conversion_usd_t"]),
         "ESR": (billet["ESR"]["total_variable_cost"], det["ESR Rebar"]["s3.cost.byproduct"],
                 det["ESR Rebar"]["summary.rolling_other_conversion"]),
@@ -1040,25 +1266,52 @@ def compute_all(state: dict, strict: bool = False) -> dict:
     wire = {"_currency": "USD", "EZDK": _finished_summary(
         billet["EZDK"]["total_variable_cost"], market, fy["Wire Rod"]["EZDK"],
         det["EZDK Wire"]["summary.home_scrap_usd_t"], det["EZDK Wire"]["summary.other_conversion_usd_t"])}
-    flat = compute_flat_summary(state, dri_vc, {"EZDK": det["EZDK Flat"]["summary.other_conversion"],
-                                                "EFS": det["EFS Flat"]["summary.other_conversion"]})
+    flat = compute_flat_summary(state, dri_vc, rules, {"EZDK": det["EZDK Flat"], "EFS": det["EFS Flat"]})
 
     # Stage 1 — volume-dependent DRI ('DRI Cost'!E16 / G16)
-    dri_volume = {"EZDK": det["EZDK Rebar"]["s1.t.dri"] + det["EZDK Flat"]["s1.t.dri"],
-                  "ERM": det["EFS Rebar"]["s1.t.dri"] + det["ESR Rebar"]["s1.t.dri"]}
+    erm_dri_t = det["EFS Rebar"]["s1.t.dri"] + det["ESR Rebar"]["s1.t.dri"]
+    if rules["erm_dri_full_volume"]:
+        erm_dri_t += det["EFS Flat"]["s1.t.dri"]
+    dri_volume = {"EZDK": det["EZDK Rebar"]["s1.t.dri"] + det["EZDK Flat"]["s1.t.dri"], "ERM": erm_dri_t}
     dri = {co: compute_dri_full(state, co, dri_var[co], dri_volume[co]) for co in dri_var}
 
     fixed = compute_fixed_allocation(state)
+
+    # Intercompany sales booked in the corrected P&L (USD, monthly, per Ktons)
+    interco = {}
+    if rules["erm_dri_pnl"]:
+        buyers = {"EFS": det["EFS Rebar"]["s1.t.dri"] * det["EFS Rebar"]["s1.price.dri"]
+                  + det["EFS Flat"]["s1.t.dri"] * det["EFS Flat"]["s1.price.dri"],
+                  "ESR": det["ESR Rebar"]["s1.t.dri"] * det["ESR Rebar"]["s1.price.dri"]}
+        qty_t = det["EFS Rebar"]["s1.t.dri"] + det["EFS Flat"]["s1.t.dri"] + det["ESR Rebar"]["s1.t.dri"]
+        interco["ERM/DRI"] = {"seller": "ERM", "product": "DRI", "buyers": ["EFS", "ESR"],
+                              "qty_kt": qty_t / 1000, "revenue_usd_m": sum(buyers.values()) / 1e6,
+                              "cogs_usd_m": qty_t * dri_vc["ERM"] / 1e6,
+                              "fixed_usd_m": fixed["allocation_usd_m"]["DRI"]["ERM"]}
+    if rules["billet_interco"] and erm_supplier and erm_billets_t:
+        sup_vc = billet[erm_supplier]["total_variable_cost"]
+        interco[f"{erm_supplier}/Billet"] = {
+            "seller": erm_supplier, "product": "Billet", "buyers": ["ERM"],
+            "qty_kt": erm_billets_t / 1000, "revenue_usd_m": erm_billets_t * erm_price / 1e6,
+            "cogs_usd_m": erm_billets_t * sup_vc / 1e6,
+            "fixed_usd_m": {line: 0.0 for line, _ in _FIXED_LINES}}
+
+    pnl = {v: compute_pnl(state, det, fixed, v, rules, interco) for v in PNL_VARIANTS}
     outputs = {
         "dri": dri, "billet": billet, "detail": det, "rebar": rebar, "wire": wire, "flat": flat,
-        "market_share": compute_market_share(state),
-        "production": compute_production(state, det),
+        "market_share": compute_market_share(state, rules),
+        "production": compute_production(state, det, rules, erm_supplier),
         "fixed_cost": fixed,
-        "pnl": {v: compute_pnl(state, det, fixed, v) for v in PNL_VARIANTS},
+        "pnl": pnl,
+        "consolidated": {v: compute_consolidated(p, rules) for v, p in pnl.items()},
+        "sourcing": {"_currency": "USD", "ERM_rebar_billet": state["sourcing"]["ERM_rebar_billet"],
+                     "price_usd_t": erm_price, "supplier": erm_supplier or "market",
+                     "billets_t": erm_billets_t},
+        "rules": dict(rules),
     }
     outputs["dri"]["_currency"] = "LE"
     outputs["detail"]["_currency"] = "none"
-    checks = run_integrity_checks(state, outputs)
+    checks = run_integrity_checks(state, {k: v for k, v in outputs.items() if k != "rules"}, rules)
     outputs["integrity"] = [{"check": n, "passed": ok, "detail": d} for n, ok, d in checks]
     if strict:
         failed = [c for c in outputs["integrity"] if not c["passed"]]

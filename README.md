@@ -1,76 +1,79 @@
-# Ezz Steel Cost Engine (Step 1)
+# Ezz Steel Cost Engine
 
-A pure-Python replica of the **New Corp Model** workbook. It covers DRI, Billet
-(EAF→CCP/TSC), finished products (Rebar, Wire Rod, HRC), the trade-off matrix,
-market share, the production cascade, fixed-cost allocation and the four P&L
-sheets (USD/LE × monthly/annual).
+A pure-Python version of the **New Corp Model**. It covers DRI, Billet (EAF→CCP/TSC),
+Rebar, Wire Rod, HRC, the trade-off matrix, market share, the production cascade,
+fixed-cost allocation, the four P&Ls (USD/LE × monthly/annual) and a consolidated P&L
+with intercompany eliminations.
 
-## Status
+## Two rule sets, one engine
 
-**Done-criterion met.** The engine reproduces the workbook cell for cell:
+| | **Corrected** (default) | **Legacy** |
+|---|---|---|
+| What | The model with the workbook's mistakes fixed and no typed-in results | An exact replica of the workbook, quirks included |
+| Used for | Live amendments, scenarios, optimization | Reproducing old figures; proving the engine is the same model |
+| Proof | 45 corrected-model tests; all 7 integrity checks pass | 2,075 cells = Excel; 8 random LibreOffice recalculations = engine |
 
-| Check | Result |
-|---|---|
-| Mapped formula cells vs Excel's cached values (reference workbook) | 2,075 cells, 0 mismatches (relative tolerance 1e-9) |
-| Every input perturbed ±15% (and dormant zero inputs switched on), workbook recalculated by LibreOffice, engine compared | 8 random scenarios × 2,075 cells, 0 mismatches |
-| Visible summary sheets | every numeric formula cell covered, except page counters and two scratch cells |
-
-`model_verification.md` (hand-built, partly from dummy figures) is retired to `archive/`.
-The workbook itself is now the oracle, so any version of the file can be checked.
+What changed and by how much, fix by fix: **[MODEL_FIXES.md](MODEL_FIXES.md)**. Group EBT moves from
+−10.87 (workbook) to −14.02 M$/month (corrected), almost all of it from one data fix: ESR's
+electricity price.
 
 ## Files
 
 | File | Role |
 |---|---|
 | `cost_engine.py` | The engine. `compute_all(state)` → every view. Pure, deterministic, no I/O. |
-| `excel_io.py` | Reads a workbook's inputs into the engine state (`extract_state`), reads Excel's results (`extract_expected`), and checks a file runs the same formulas (`check_same_model`). |
-| `excel_map.py` | The home cell of every engine output, used by the tests. |
-| `model_initial_state.json` | State extracted from the reference workbook. |
-| `MODEL_QUIRKS.md` | **Read this.** Places where the workbook looks wrong or departs from the rulebook. Replicated, awaiting your decision. |
-| `tests/` | Fidelity tests, the LibreOffice differential test, behaviour tests. |
-| `tests/fixtures/New_Corp_Model_v8_30-12-19.xlsx` | Reference workbook. |
-| `archive/` | Superseded verification sheet and the old dummy-figure state. |
+| `model_initial_state.json` | **Corrected baseline**: the inputs the model runs on. |
+| `model_fixes.py` | Workbook → corrected state, and the fix-by-fix bridge. |
+| `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
+| `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
+| `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
+| `tests/` | Corrected-model tests, Excel fidelity, LibreOffice differential test. |
 
 ## Usage
 
 ```python
-import excel_io, cost_engine
+import json, cost_engine
 
-state = excel_io.extract_state("New_Corp_Model_v8_30-12-19.xlsx")   # or json.load(...)
+state = json.load(open("model_initial_state.json"))       # corrected baseline
+state["sales"]["EZDK"]["Rebar"]["local_kt"] = 120          # an amendment
 out = cost_engine.compute_all(state)
 
-out["billet"]["EZDK"]["total_variable_cost"]           # 'Billet'!E30
-out["billet"]["tradeoff"]["minimum"]["ERM"]             # 'Billet'!G44
-out["pnl"]["usd_monthly"]["columns"]["R"]["ebt"]        # 'P&L $ Monthly'!R43
-out["integrity"]                                        # integrity-check results
+out["consolidated"]["usd_monthly"]["consolidated"]["ebt"]  # group EBT after eliminations
+out["pnl"]["usd_monthly"]["columns"]["ERM/DRI"]           # any P&L column: "<CO>/<product>",
+                                                           #   "<CO>/Sub-Total", "Total"
+out["sourcing"]                                            # where ERM's billets come from
+out["integrity"]                                           # all checks; strict=True raises
 ```
 
-To use another version of the workbook (same model, different figures):
+ERM's billet source: `state["sourcing"]["ERM_rebar_billet"]` = `"min"` (cheapest in the
+trade-off matrix, the default), `"market"`, `"offer:EZDK"` / `"offer:EFS"` / `"offer:ESR"`,
+or `"vc:<CO>"` (at the supplier's cost). An internal source raises the supplier's production.
+
+Any single fix can be switched off: `compute_all(state, rules={**cost_engine.CORRECTED_RULES, "break_even_on_cm": False})`.
+
+From a workbook (same model, any figures):
 
 ```python
-excel_io.check_same_model("other_version.xlsx", "tests/fixtures/New_Corp_Model_v8_30-12-19.xlsx")
-# [] → same formulas; the engine applies as-is.  Otherwise: the cells whose formulas differ.
+import excel_io, model_fixes
+legacy = excel_io.extract_state("some_version.xlsx")       # exact workbook behaviour
+corrected, log = model_fixes.to_corrected(legacy)          # apply the fixes
+excel_io.check_same_model("some_version.xlsx", "tests/fixtures/New_Corp_Model_v8_30-12-19.xlsx")
 ```
 
-`python excel_io.py <workbook.xlsx> <out_dir>` writes the state and expected-values JSON.
+`python model_fixes.py [workbook.xlsx]` regenerates `model_initial_state.json` and the bridge.
 
 ## Tests
 
 ```
 pip install -r requirements.txt
-python -m pytest -q tests          # ~40 s; the LibreOffice test is skipped if soffice is absent
+python -m pytest -q tests          # ~1 min; LibreOffice test is skipped if soffice is absent
 ```
 
-## How this relates to the Step 1 brief and rulebook
+## Relation to the Step 1 brief and rulebook
 
-The brief's architecture holds: pure functions, full precision, currency-tagged
-views, integrity checks, a sourcing decision in state, and `compute_all`. Where
-the rulebook describes behaviour the workbook doesn't have, **the engine follows
-the workbook**, and the gap is listed in `MODEL_QUIRKS.md` §B. For example, the
-workbook has no consolidated eliminations column and no ERM DRI P&L, and ERM's
-billet source is EZDK's VC rather than market. Integrity checks 1, 2, 5 and 7
-run at runtime. Checks 3, 4 and 6 hold by construction: the matrix is computed on
-demand, every quantity is derived from sales, and the EFS/ESR DRI price is read
-from ERM's DRI calculation. Integrity results are reported in
-`out["integrity"]`; `compute_all(state, strict=True)` raises on failure. The
-reference data currently fails `blending_100` (MODEL_QUIRKS A7).
+The brief's architecture holds: pure functions, full precision, currency-tagged views,
+sourcing decision in state, integrity checks, `compute_all`. The corrected model now also
+does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
+P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
+(§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
+Next step per the brief: `state_manager.py` (baselines, scenarios, live amendments).

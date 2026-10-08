@@ -1,5 +1,6 @@
 """
-Where every engine output lives in the workbook.
+Where every engine output lives in the workbook (legacy rules only — the corrected
+model deliberately departs from the workbook).
 
 ``excel_cells(outputs)`` yields ``("Sheet!Cell", value)`` for every output that has
 a home cell.  Tests compare these against Excel's cached values (and against
@@ -63,7 +64,8 @@ INTEGRATED_FLAT = {
     "summary.total_value": "E268", "summary.vc_per_t": "E269",
 }
 ESR = {
-    "finished_t": ["E10", "E104"], "s1.billets_t": ["E19", "E106"], "s1.eaf_yield": "E20",
+    "finished_t": ["E10", "E104"], "s1.billets_t": "E19", "s3.feed.produced_t": "E106",
+    "s1.eaf_yield": "E20",
     "s1.bccm_yield": "E21", "s1.yield": "E22", "s1.solid_charge_t": "E23",
     "s1.blend.imported": "D26", "s1.blend.local": "D27", "s1.blend.dri": "D28",
     "s1.t.imported": "E26", "s1.t.local": "E27", "s1.t.dri": "E28", "s1.t.home": "E29",
@@ -294,12 +296,13 @@ def excel_cells(outputs: dict, state: dict):
         yield f"Fixed Cost!H{r0 + 4}", a["Total"]["total"]
 
     # P&L
-    from cost_engine import PNL_VARIANTS
+    from cost_engine import PNL_COLUMN_LETTERS, PNL_VARIANTS
     for variant, (sheet, in_le, _) in PNL_VARIANTS.items():
         cols = outputs["pnl"][variant]["columns"]
         if in_le:
             yield f"{sheet}!C4", fx
-        for col, c in cols.items():
+        for col, key_ in PNL_COLUMN_LETTERS.items():
+            c = cols[key_]
             for key, r in PNL_ROWS.items():
                 if key in c and c[key] is not None:
                     yield f"{sheet}!{col}{r}", c[key]

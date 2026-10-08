@@ -1,7 +1,5 @@
 """The engine reproduces the reference workbook cell for cell."""
 
-import collections
-
 import pytest
 
 import excel_io
@@ -51,7 +49,8 @@ def test_key_headline_numbers(reference_state):
     assert o["billet"]["tradeoff"]["minimum"]["ERM"] == pytest.approx(429.88)
     assert o["rebar"]["ERM"]["sc1"]["total_variable_cost"] == pytest.approx(460.00958, abs=1e-5)
     usd = o["pnl"]["usd_monthly"]["columns"]
-    assert usd["R"]["ebt"] == pytest.approx(-10.86977, abs=1e-5)
-    assert usd["H"]["contribution_margin"] == pytest.approx(21.05703, abs=1e-5)
-    counts = collections.Counter(c["passed"] for c in o["integrity"])
-    assert counts[True] + counts[False] == 4
+    assert usd["Total"]["ebt"] == pytest.approx(-10.86977, abs=1e-5)
+    assert usd["EZDK/Sub-Total"]["contribution_margin"] == pytest.approx(21.05703, abs=1e-5)
+    # the workbook fails two checks: unbalanced blends and a typed-in matrix cell / DRI gain
+    failed = {c["check"] for c in o["integrity"] if not c["passed"]}
+    assert failed == {"blending_100", "no_hardcoded_results"}

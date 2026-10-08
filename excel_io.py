@@ -311,7 +311,8 @@ def _dri_selling_price(cost: _Sheet, cost_values, col: str) -> dict:
     cached = cost_values[f"{col}86"].value
     if isinstance(cached, (int, float)) and not isinstance(cached, bool):
         return {"selling_price_le_t": float(cached),
-                "selling_price_source": f"cached value of external link 'DRI Cost'!{col}86"}
+                "selling_price_source": f"cached value of external link 'DRI Cost'!{col}86",
+                "selling_price_input_le_t": cost.num(f"{col}13")}
     return {"selling_price_le_t": cost.num(f"{col}13"),
             "selling_price_source": f"'DRI Cost'!{col}13 (external link {col}86 unavailable)"}
 
@@ -447,6 +448,9 @@ def extract_state(path: str) -> dict:
     sales, market, pnl = _read_sales(S["Market Share"], S["P&L $ Monthly"])
     return {
         "meta": {"source_workbook": os.path.basename(path)},
+        # an extracted workbook is evaluated with the workbook's own (legacy) rules;
+        # model_fixes.to_corrected() turns it into a corrected-model state
+        "rules_profile": "legacy",
         "fx_egp_per_usd": fx,
         "sales": sales,
         "total_local_market_kt": market,

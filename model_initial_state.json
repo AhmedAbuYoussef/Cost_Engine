@@ -1,7 +1,9 @@
 {
  "meta": {
-  "source_workbook": "New_Corp_Model_v8_30-12-19.xlsx"
+  "source_workbook": "New_Corp_Model_v8_30-12-19.xlsx",
+  "derived_from": "legacy workbook via model_fixes.to_corrected"
  },
+ "rules_profile": "corrected",
  "fx_egp_per_usd": 16.2,
  "sales": {
   "EZDK": {
@@ -68,7 +70,6 @@
    "capacity_t": 3000000.0,
    "capacity_utilization": 1.0,
    "selling_price_le_t": 6465.413290254993,
-   "selling_price_source": "cached value of external link 'DRI Cost'!E86",
    "consumption": {
     "electricity_kwh": 41.5875573743658,
     "natural_gas_nm3": 292.58,
@@ -106,7 +107,6 @@
    "capacity_t": 1900000.0,
    "capacity_utilization": 1.0,
    "selling_price_le_t": 6465.413290254993,
-   "selling_price_source": "cached value of external link 'DRI Cost'!G86",
    "consumption": {
     "electricity_kwh": 27.124498167211286,
     "natural_gas_nm3": 333.0,
@@ -148,7 +148,7 @@
     "blend_pct": {
      "dri": 80.0,
      "local_scrap": 4.0,
-     "imported_scrap": 15.977
+     "imported_scrap": 16.0
     },
     "eaf_yield_pct": 84.93,
     "ccp_yield_pct": 99.38,
@@ -163,7 +163,7 @@
     "blend_pct": {
      "dri": 80.0,
      "local_scrap": 14.0,
-     "imported_scrap": 5.978
+     "imported_scrap": 6.0
     },
     "eaf_yield_pct": 84.17,
     "ccp_yield_pct": 98.05,
@@ -172,13 +172,9 @@
    },
    "ESR": {
     "dri_margin_from_erm_usd_t": 8.988524890446993,
-    "local_scrap_usd_t": {
-     "same_as": "EZDK"
-    },
-    "imported_scrap_usd_t": {
-     "same_as": "EZDK"
-    },
-    "electricity_usd_kwh": 0.007,
+    "local_scrap_usd_t": 300.0,
+    "imported_scrap_usd_t": 300.0,
+    "electricity_usd_kwh": 0.07,
     "blend_pct": {
      "dri": 20.0,
      "local_scrap": 16.0133,
@@ -190,28 +186,22 @@
     "tradeoff_ratio": 1.0404567699836869
    }
   },
-  "landed_cost_factor": 1.01741929376124,
   "market_usd_t": {
    "base": 428.0,
    "safe_guards": 74.0,
    "other_costs": 12.36
   },
-  "tradeoff_overrides": {
-   "EZDK": {
-    "ERM": 429.88
-   }
-  }
+  "tradeoff_overrides": {}
  },
  "flat": {
   "EZDK": {
-   "dri_margin_from_erm_usd_t": 0.0,
    "local_scrap_usd_t": 248.87,
    "imported_scrap_usd_t": 275.51,
    "electricity_usd_kwh": 0.07,
    "blend_pct": {
     "dri": 80.0,
     "local_scrap": 16.998,
-    "imported_scrap": 3.0
+    "imported_scrap": 3.001999999999999
    },
    "eaf_yield_pct": 85.22,
    "tsc_yield_pct": 98.73,
@@ -219,14 +209,13 @@
    "eaf_lf_electricity_kwh_t_ms": 693.12
   },
   "EFS": {
-   "dri_margin_from_erm_usd_t": 1.6285248904469614,
    "local_scrap_usd_t": 248.87,
    "imported_scrap_usd_t": 267.27,
    "electricity_usd_kwh": 0.07,
    "blend_pct": {
     "dri": 80.0,
     "local_scrap": 14.0,
-    "imported_scrap": 5.978
+    "imported_scrap": 6.0
    },
    "eaf_yield_pct": 84.17,
    "tsc_yield_pct": 98.0,
@@ -246,7 +235,7 @@
   }
  },
  "sourcing": {
-  "ERM_rebar_billet": "vc:EZDK"
+  "ERM_rebar_billet": "min"
  },
  "detail": {
   "EZDK Rebar": {
@@ -696,7 +685,7 @@
     "imported_billet_usd_t": 0.0,
     "imported_extra_le_t": 0.0,
     "local_billet_t": 0.0,
-    "byproduct_t": "billet_price",
+    "byproduct_t": 7111.501093131888,
     "electricity_kwh": {
      "usd": 0.07
     },
@@ -795,15 +784,15 @@
   }
  },
  "pnl": {
-  "export_expense_rate": {
+  "export_expense_usd_t": {
    "EZDK": {
     "Rebar": 0.0,
-    "Wire Rod": 0.2,
-    "HRC": 0.8
+    "Wire Rod": 20.0,
+    "HRC": 20.0
    },
    "EFS": {
     "Rebar": 0.0,
-    "HRC": 0.15
+    "HRC": 20.0
    },
    "ERM": {
     "Rebar": 0.0
@@ -811,9 +800,6 @@
    "ESR": {
     "Rebar": 0.0
    }
-  },
-  "intercompany_gain_dri_musd": {
-   "ERM": 0.17
   }
  }
 }

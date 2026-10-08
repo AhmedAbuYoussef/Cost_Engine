@@ -22,8 +22,8 @@ def test_pure_and_deterministic(state):
 
 def test_state_is_json_round_trippable(state):
     again = json.loads(json.dumps(state))
-    assert cost_engine.compute_all(again)["pnl"]["usd_monthly"]["columns"]["R"]["ebt"] == \
-        cost_engine.compute_all(state)["pnl"]["usd_monthly"]["columns"]["R"]["ebt"]
+    assert cost_engine.compute_all(again)["pnl"]["usd_monthly"]["columns"]["Total"]["ebt"] == \
+        cost_engine.compute_all(state)["pnl"]["usd_monthly"]["columns"]["Total"]["ebt"]
 
 
 # ---- integrity checks ------------------------------------------------------ #
@@ -62,16 +62,17 @@ def test_strict_mode_raises(state):
         cost_engine.compute_all(state, strict=True)
 
 
-@pytest.mark.parametrize("company, product, col", [
-    ("ERM", "Rebar", "N"), ("ESR", "Rebar", "P"), ("EFS", "Rebar", "J"), ("EZDK", "Rebar", "E"),
+@pytest.mark.parametrize("company, product", [
+    ("ERM", "Rebar"), ("ESR", "Rebar"), ("EFS", "Rebar"), ("EZDK", "Rebar"),
 ])
-def test_zero_sales_product(state, company, product, col):
+def test_zero_sales_product(state, company, product):
     """Zero sales is a legitimate scenario (rulebook check 7).  Excel shows #DIV/0!; the
     engine keeps the per-ton costs, reports zero volumes and a break-even of 0."""
     base = cost_engine.compute_all(state)
     state["sales"][company][product]["local_kt"] = 0.0
     state["sales"][company][product]["export_kt"] = 0.0
     out = cost_engine.compute_all(state)
+    col = f"{company}/{product}"
     c = out["pnl"]["usd_monthly"]["columns"][col]
     assert c["total_qty"] == 0 and c["break_even_qty"] == 0
     assert c["avg_price"] is None                       # Excel: #DIV/0!
@@ -133,9 +134,9 @@ def test_sales_drive_production(state):
 
 
 def test_fx_flows_to_local_prices(state):
-    base = cost_engine.compute_all(state)["pnl"]["usd_monthly"]["columns"]["E"]["local_price"]
+    base = cost_engine.compute_all(state)["pnl"]["usd_monthly"]["columns"]["EZDK/Rebar"]["local_price"]
     state["fx_egp_per_usd"] *= 2
-    after = cost_engine.compute_all(state)["pnl"]["usd_monthly"]["columns"]["E"]["local_price"]
+    after = cost_engine.compute_all(state)["pnl"]["usd_monthly"]["columns"]["EZDK/Rebar"]["local_price"]
     assert after == pytest.approx(base / 2)
 
 
