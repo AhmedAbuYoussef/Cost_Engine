@@ -70,6 +70,9 @@ typed-in results.
 2. **ERM's rolling scrap value: 7,112 LE/t.** Frozen at today's value, which is the billet price. EZDK values the same kind of scrap at 5,133 LE/t. If 5,133 is right, ERM's scrap credit shrinks and its EBT falls by 0.044 M$/month.
 3. **ERM billet sourcing = cheapest internal/market offer.** Today that is EZDK at cost × 1.041. Another rule is one setting away.
 4. **Export expenses = $20/t.** Inferred from 0.2 M$ / 10 kt, 0.8 / 40 and 0.15 / 7.5, which all give exactly 20. (The detail sheets mention $11/t in an unused cell.)
+5. **Capacity (warning, from the workbook's own capacity cells ÷ 12).**
+   - With ERM buying its billets from EZDK, EZDK needs **261.6 kt/month of DRI against 250 kt** (104.6%). This is the upstream check rulebook §4.7 asks for: either part of ERM's billets come from EFS or the market, or the ceiling is wrong.
+   - EZDK wire rod runs at 50 kt against a 41.7 kt "capacity". That cell on the Wire sheet looks copy-pasted from ERM's (same label, same 16.08% utilisation), so it is probably not the real wire capacity.
 
 ## Not modelled
 

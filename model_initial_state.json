@@ -67,8 +67,6 @@
    "iop_landed_usd_t": 130.0,
    "ng_price_usd_mmbtu": 5.5,
    "mrmr": 1.5,
-   "capacity_t": 3000000.0,
-   "capacity_utilization": 1.0,
    "selling_price_le_t": 6465.413290254993,
    "consumption": {
     "electricity_kwh": 41.5875573743658,
@@ -94,18 +92,13 @@
    "fixed_le": {
     "labor": 54011351.910000004,
     "depreciation": 239746417.13999996,
-    "other_fixed": {
-     "total_le": 347999806.05,
-     "less_depreciation_le": 239746417.14
-    }
+    "other_fixed": 54242037.00000002
    }
   },
   "ERM": {
    "iop_landed_usd_t": 136.62,
    "ng_price_usd_mmbtu": 5.5,
    "mrmr": 1.43,
-   "capacity_t": 1900000.0,
-   "capacity_utilization": 1.0,
    "selling_price_le_t": 6465.413290254993,
    "consumption": {
     "electricity_kwh": 27.124498167211286,
@@ -131,10 +124,7 @@
    "fixed_le": {
     "labor": 54011351.910000004,
     "depreciation": 239746417.13999996,
-    "other_fixed": {
-     "total_le": 347999806.05,
-     "less_depreciation_le": 239746417.14
-    }
+    "other_fixed": 54242037.00000002
    }
   }
  },
@@ -800,6 +790,37 @@
    "ESR": {
     "Rebar": 0.0
    }
+  }
+ },
+ "capacity_ceilings": {
+  "dri": {
+   "EZDK": 250000.0,
+   "ERM": 158333.33333333334
+  },
+  "finished": {
+   "EZDK": {
+    "Rebar": 183333.33333333334,
+    "Wire Rod": 41666.666666666664,
+    "HRC": 100000.0
+   },
+   "EFS": {
+    "Rebar": 100000.0,
+    "HRC": 100000.0
+   },
+   "ERM": {
+    "Rebar": 41666.666666666664
+   },
+   "ESR": {
+    "Rebar": 100000.0
+   }
+  }
+ },
+ "month_label": "2026-04",
+ "policy_floors": {
+  "local_share_min": {
+   "Rebar": 0.5,
+   "Wire Rod": 0.2,
+   "HRC": 0.2
   }
  }
 }

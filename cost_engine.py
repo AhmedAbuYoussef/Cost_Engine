@@ -110,6 +110,15 @@ _DRI_LINES = ("electricity", "natural_gas", "oxygen", "nitrogen", "water",
               "chemicals", "spare_parts", "external_services", "other")
 
 
+def _dri_annual_capacity(state: dict, company: str) -> float:
+    """'DRI Cost'!E10 (annual).  The corrected state keeps one source of truth: the
+    monthly ceiling in ``capacity_ceilings``."""
+    d = state["dri"][company]
+    if "capacity_t" in d:
+        return d["capacity_t"]
+    return state["capacity_ceilings"]["dri"][company] * 12
+
+
 def compute_dri_variable(state: dict, company: str) -> dict:
     """DRI variable cost — no volume needed.  'DRI Cost' rows 15–68, 'DRI' sheet."""
     d, fx = state["dri"][company], state["fx_egp_per_usd"]
@@ -142,7 +151,7 @@ def compute_dri_variable(state: dict, company: str) -> dict:
         "other_conversion_usd_t": other_conv,
         "conversion_rm_le_t": (d["mrmr"] - 1) * iop_le,
         "conversion_others_le_t": others_le,
-        "conversion_exp_le": d["capacity_t"] * ((d["mrmr"] - 1) * iop_le + others_le),
+        "conversion_exp_le": _dri_annual_capacity(state, company) * ((d["mrmr"] - 1) * iop_le + others_le),
         "variable_cost_le_t": iop_cost_le + others_le,
         # 'DRI' sheet — conversion-cost view in USD
         "summary_usd_t": {
@@ -1104,9 +1113,43 @@ def _check_summary_matches_detail(outputs):
             else "summary ≠ detail: " + "; ".join(bad))
 
 
+# A failed "error" check means the numbers cannot be trusted; a failed "warning" check
+# (capacity) means the plan is physically stretched — reported, never blocking.
+CHECK_SEVERITY = {"capacity_within_limits": "warning"}
+
+
+def compute_capacity(state: dict, outputs: dict) -> dict:
+    """Utilisation against the monthly ceilings (system prompt, Appendix A).  Billet has no
+    ceiling: billet capacity is taken to follow downstream demand."""
+    caps = state.get("capacity_ceilings")
+    if not caps:
+        return {"_currency": "none", "items": {}}
+    det = outputs["detail"]
+    sheet = {("EZDK", "Rebar"): "EZDK Rebar", ("EZDK", "Wire Rod"): "EZDK Wire",
+             ("EZDK", "HRC"): "EZDK Flat", ("EFS", "Rebar"): "EFS Rebar", ("EFS", "HRC"): "EFS Flat",
+             ("ERM", "Rebar"): "ERM Rolling", ("ESR", "Rebar"): "ESR Rebar"}
+    items = {}
+    for co, cap in caps.get("dri", {}).items():
+        items[f"DRI {co}"] = (outputs["dri"][co]["production_t"], cap)
+    for co, prods in caps.get("finished", {}).items():
+        for prod, cap in prods.items():
+            items[f"{prod} {co}"] = (det[sheet[(co, prod)]]["finished_t"], cap)
+    return {"_currency": "none", "items": {
+        k: {"required_t": req, "ceiling_t": cap, "utilisation_pct": _pct_of(req, cap),
+            "over_by_t": max(0.0, req - cap)} for k, (req, cap) in items.items()}}
+
+
+def _check_capacity(capacity: dict):
+    over = {k: v for k, v in capacity["items"].items() if v["over_by_t"] > 1e-6}
+    return (not over, "every stage within its monthly capacity" if not over else
+            "over capacity: " + "; ".join(f"{k} needs {v['required_t']:,.0f} t vs {v['ceiling_t']:,.0f} t "
+                                          f"({v['utilisation_pct']:.1f}%)" for k, v in over.items()))
+
+
 def run_integrity_checks(state: dict, outputs: dict | None = None, rules: dict | None = None) -> list:
     """Returns [(name, passed, detail)].  Checks 3 and 4 hold by construction: the matrix
-    is computed on demand and every quantity is derived from sales."""
+    is computed on demand and every quantity is derived from sales.  Severity of each
+    check: CHECK_SEVERITY (default "error")."""
     rules = rules or CORRECTED_RULES
     res = [("fixed_distribution_100", *_check_fixed_distribution_sums(state)),
            ("blending_100", *_check_blending_ratios_sum(state)),
@@ -1119,6 +1162,8 @@ def run_integrity_checks(state: dict, outputs: dict | None = None, rules: dict |
                         *_check_intercompany_reconciliation(outputs, state["fx_egp_per_usd"])))
         if rules["summary_from_detail"]:
             res.append(("summary_matches_detail", *_check_summary_matches_detail(outputs)))
+        if outputs.get("capacity", {}).get("items"):
+            res.append(("capacity_within_limits", *_check_capacity(outputs["capacity"])))
     return res
 
 
@@ -1311,10 +1356,51 @@ def compute_all(state: dict, rules: dict | None = None, strict: bool = False) ->
     }
     outputs["dri"]["_currency"] = "LE"
     outputs["detail"]["_currency"] = "none"
+    outputs["capacity"] = compute_capacity(state, outputs)
     checks = run_integrity_checks(state, {k: v for k, v in outputs.items() if k != "rules"}, rules)
-    outputs["integrity"] = [{"check": n, "passed": ok, "detail": d} for n, ok, d in checks]
+    outputs["integrity"] = [{"check": n, "passed": ok, "detail": d,
+                             "severity": CHECK_SEVERITY.get(n, "error")} for n, ok, d in checks]
     if strict:
-        failed = [c for c in outputs["integrity"] if not c["passed"]]
+        failed = failed_errors(outputs)
         if failed:
             raise IntegrityError(failed[0]["detail"])
     return outputs
+
+
+def failed_errors(outputs: dict) -> list:
+    """Failed checks of severity "error" — the ones that block commits and strict runs."""
+    return [c for c in outputs["integrity"] if not c["passed"] and c["severity"] == "error"]
+
+
+def key_figures(outputs: dict) -> dict:
+    """A flat digest of the figures people decide on — used for the impact of an
+    amendment and for comparing states.  Keys name the figure and its unit."""
+    k: dict = {}
+    cons = outputs["consolidated"]["usd_monthly"]["consolidated"]
+    for line, label in (("total_value", "revenue"), ("contribution_margin", "CM"), ("ebtd", "EBTD"),
+                        ("ebt", "EBT")):
+        k[f"Group {label} M$"] = cons[line]
+    cols = outputs["pnl"]["usd_monthly"]["columns"]
+    for key, c in cols.items():
+        if key == "Total":
+            continue
+        if key.endswith("/Sub-Total"):
+            co = key.split("/")[0]
+            k[f"{co} revenue M$"] = c["total_value"]
+            k[f"{co} CM M$"] = c["contribution_margin"]
+            k[f"{co} EBT M$"] = c["ebt"]
+        else:
+            k[f"{key} qty kt"] = c["total_qty"]
+            k[f"{key} VC $/t"] = c["cost_per_t"]
+            k[f"{key} CM $/t"] = c["cm_per_t"]
+            k[f"{key} EBT M$"] = c["ebt"]
+    for co in ("EZDK", "ERM"):
+        k[f"DRI {co} VC $/t"] = outputs["dri"][co]["summary_usd_t"]["total_variable_cost"]
+    for co in BILLET_PRODUCERS:
+        k[f"Billet {co} VC $/t"] = outputs["billet"][co]["total_variable_cost"]
+    for co in HRC_PRODUCERS:
+        k[f"HRC {co} VC $/t"] = outputs["flat"][co]["total_variable_cost"]
+    k["ERM billet price $/t"] = outputs["sourcing"]["price_usd_t"]
+    for name, v in outputs.get("capacity", {}).get("items", {}).items():
+        k[f"Capacity {name} %"] = v["utilisation_pct"]
+    return k

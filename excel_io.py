@@ -423,6 +423,24 @@ def _read_fixed(s: _Sheet) -> tuple[float, dict]:
     return s.num("D15"), out
 
 
+def _read_capacity(S: dict) -> dict:
+    """Monthly ceilings (t/month) from the workbook's annual capacity cells."""
+    for sheet, cell in (("DRI Cost", "C10"), ("EZDK Rebar", "C8"), ("EZDK Wire", "C11"),
+                        ("EZDK Flat", "C8"), ("ERM Rolling", "C11")):
+        S[sheet].expect_label(cell, "capacity", "production cap")
+    m = lambda sheet, cell: S[sheet].num(cell) / 12
+    return {
+        "dri": {"EZDK": m("DRI Cost", "E10"), "ERM": m("DRI Cost", "G10")},
+        "finished": {
+            "EZDK": {"Rebar": m("EZDK Rebar", "E8"), "Wire Rod": m("EZDK Wire", "E11"),
+                     "HRC": m("EZDK Flat", "E8")},
+            "EFS": {"Rebar": m("EFS Rebar", "E8"), "HRC": m("EFS Flat", "E8")},
+            "ERM": {"Rebar": m("ERM Rolling", "E11")},
+            "ESR": {"Rebar": m("ESR Rebar", "E8")},
+        },
+    }
+
+
 def _detect_erm_billet_source(rebar: _Sheet) -> str:
     v = str(rebar.raw("G12")).replace("$", "")
     mt = re.fullmatch(r"=\+?Billet!([EFG])30", v)
@@ -473,6 +491,7 @@ def extract_state(path: str) -> dict:
         },
         "fixed_cost": fixed,
         "pnl": pnl,
+        "capacity_ceilings": _read_capacity(S),
     }
 
 

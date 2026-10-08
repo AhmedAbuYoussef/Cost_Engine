@@ -197,6 +197,24 @@ FIXES = [
 ]
 
 
+DEFAULT_POLICY_FLOORS = {"local_share_min": {"Rebar": 0.50, "Wire Rod": 0.20, "HRC": 0.20}}
+DEFAULT_MONTH_LABEL = "2026-04"
+
+
+def _complete_state(state: dict) -> None:
+    """Blocks the system prompt's Appendix A requires, and one source of truth for capacity
+    (the monthly ceiling replaces the workbook's duplicate annual DRI capacity cell)."""
+    state.setdefault("month_label", DEFAULT_MONTH_LABEL)
+    state.setdefault("policy_floors", copy.deepcopy(DEFAULT_POLICY_FLOORS))
+    for d in state["dri"].values():
+        d.pop("capacity_t", None)
+        d.pop("capacity_utilization", None)     # never referenced by any formula
+        f = d["fixed_le"]
+        if isinstance(f["other_fixed"], dict):  # workbook: =total − depreciation − labor
+            o = f["other_fixed"]
+            f["other_fixed"] = o["total_le"] - o["less_depreciation_le"] - f["labor"]
+
+
 def to_corrected(legacy_state: dict) -> tuple[dict, list]:
     """Apply every fix.  Returns (corrected state, [(fix id, title, notes)])."""
     state = copy.deepcopy(legacy_state)
@@ -205,6 +223,7 @@ def to_corrected(legacy_state: dict) -> tuple[dict, list]:
     for fid, title, fn in FIXES:
         log.append((fid, title, fn(state, rules)))
     assert rules == ce.CORRECTED_RULES, "every rule must be switched on by some fix"
+    _complete_state(state)
     state["rules_profile"] = "corrected"
     state.setdefault("meta", {})["derived_from"] = "legacy workbook via model_fixes.to_corrected"
     return state, log

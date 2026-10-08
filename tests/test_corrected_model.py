@@ -44,8 +44,14 @@ def test_baseline_passes_every_integrity_check(cs):
     out = ce.compute_all(cs, strict=True)
     assert {c["check"] for c in out["integrity"]} == {
         "fixed_distribution_100", "blending_100", "no_hardcoded_results", "currency_tagged",
-        "break_even_zero", "intercompany_reconciles", "summary_matches_detail"}
-    assert all(c["passed"] for c in out["integrity"])
+        "break_even_zero", "intercompany_reconciles", "summary_matches_detail",
+        "capacity_within_limits"}
+    assert ce.failed_errors(out) == []
+    # capacity is a warning: with ERM's billets EZDK needs 104.6% of its DRI capacity, and
+    # wire rod runs above the (doubtful) workbook ceiling
+    cap = next(c for c in out["integrity"] if c["check"] == "capacity_within_limits")
+    assert cap["severity"] == "warning" and not cap["passed"]
+    assert "DRI EZDK" in cap["detail"] and "Wire Rod EZDK" in cap["detail"]
 
 
 def test_corrected_state_has_no_legacy_artefacts(cs):
@@ -158,7 +164,7 @@ def test_blend_with_home_scrap_is_checked_and_costed(cs):
     assert not checks["blending_100"]            # 105% now
     assert checks["summary_matches_detail"]      # home scrap is in both
     cs["billet"]["companies"]["EZDK"]["blend_pct"]["imported_scrap"] -= 5
-    assert all(c["passed"] for c in run(cs)["integrity"])
+    assert ce.failed_errors(run(cs)) == []
 
 
 # ---- B1 billet sourcing and cascade -------------------------------------------------- #
@@ -193,7 +199,7 @@ def test_buying_from_esr_moves_the_volume_to_esr(cs):
     assert "ESR/Billet" in usd(out) and "EZDK/Billet" not in usd(out)
     added = out["detail"]["ESR Rebar"]["s1.billets_t"] - base["detail"]["ESR Rebar"]["s1.billets_t"]
     assert added == pytest.approx(out["detail"]["ERM Rolling"]["t.produced"])
-    assert all(c["passed"] for c in out["integrity"])
+    assert ce.failed_errors(out) == []
 
 
 @pytest.mark.parametrize("change", ["tradeoff_ratio", "dri_margin"])
