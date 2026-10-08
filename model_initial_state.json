@@ -1,274 +1,819 @@
 {
-  "global": {
-    "fx_rate_egp_usd": 15.92,
-    "currency_default": "USD",
-    "date": "2026-04-17"
+ "meta": {
+  "source_workbook": "New_Corp_Model_v8_30-12-19.xlsx"
+ },
+ "fx_egp_per_usd": 16.2,
+ "sales": {
+  "EZDK": {
+   "Rebar": {
+    "local_kt": 100.0,
+    "export_kt": 0.0,
+    "local_price_le_t": 9300.0,
+    "export_price_usd_t": 490.0
+   },
+   "Wire Rod": {
+    "local_kt": 40.0,
+    "export_kt": 10.0,
+    "local_price_le_t": 9075.0,
+    "export_price_usd_t": 480.0
+   },
+   "HRC": {
+    "local_kt": 45.0,
+    "export_kt": 40.0,
+    "local_price_le_t": 8900.0,
+    "export_price_usd_t": 510.0
+   }
   },
-
-  "entities": {
-    "companies": ["EZDK", "EFS", "ERM", "ESR"],
-    "products": ["Rebar", "Wire Rod", "HRC"],
-    "dri_producers": ["EZDK", "ERM"],
-    "billet_producers": ["EZDK", "EFS", "ESR"],
-    "dri_supply_map": {
-      "EZDK": "EZDK",
-      "EFS":  "ERM",
-      "ESR":  "ERM"
-    }
+  "EFS": {
+   "Rebar": {
+    "local_kt": 70.0,
+    "export_kt": 0.0,
+    "local_price_le_t": 9300.0,
+    "export_price_usd_t": 490.0
+   },
+   "HRC": {
+    "local_kt": 7.5,
+    "export_kt": 7.5,
+    "local_price_le_t": 8900.0,
+    "export_price_usd_t": 510.0
+   }
   },
-
-  "dri": {
-    "EZDK": {
-      "production_volume_tons": 153735,
-      "mrmr": 1.47,
-      "selling_price_le_ton": 6465,
-      "consumptions_per_ton_dri": {
-        "electricity_kwh":       42.0,
-        "natural_gas_nm3":      301.7,
-        "oxygen_nm3":            14.0,
-        "nitrogen_nm3":          15.5,
-        "water_nm3":              1.2,
-        "chemicals_t":            1.0,
-        "spare_parts_t":          0.0,
-        "external_services_t":    0.993,
-        "other_t":                1.0
-      },
-      "unit_prices": {
-        "iop_landed_egp_ton":  2465,
-        "iop_landed_usd_ton":   154.84,
-        "electricity_egp_kwh":    0.9,
-        "natural_gas_egp_nm3":    2.56,
-        "oxygen_egp_nm3":         0.0,
-        "nitrogen_egp_nm3":       1.0,
-        "water_egp_nm3":          4.0,
-        "chemicals_le_ton":      25,
-        "spare_parts_le_ton":     0,
-        "external_services_le_ton": 43,
-        "other_le_ton":          20
-      },
-      "fixed_costs_le": {
-        "labor":        54011352,
-        "depreciation": 239746417,
-        "other_fixed":  54242037
-      }
-    },
-    "ERM": {
-      "production_volume_tons": 68821,
-      "mrmr": 1.43,
-      "selling_price_le_ton": 6465,
-      "consumptions_per_ton_dri": {
-        "electricity_kwh":       27.0,
-        "natural_gas_nm3":      333.0,
-        "oxygen_nm3":            14.0,
-        "nitrogen_nm3":          10.2,
-        "water_nm3":              1.2,
-        "chemicals_t":            0.652,
-        "spare_parts_t":          0.0,
-        "external_services_t":    0.607,
-        "other_t":                0.0
-      },
-      "unit_prices": {
-        "iop_landed_egp_ton":  2775,
-        "iop_landed_usd_ton":   174.31,
-        "electricity_egp_kwh":    0.9,
-        "natural_gas_egp_nm3":    2.56,
-        "oxygen_egp_nm3":         0.0,
-        "nitrogen_egp_nm3":       1.0,
-        "water_egp_nm3":          4.0,
-        "chemicals_le_ton":      25,
-        "spare_parts_le_ton":     0,
-        "external_services_le_ton": 44,
-        "other_le_ton":           0
-      },
-      "fixed_costs_le": {
-        "labor":        54011352,
-        "depreciation": 239746417,
-        "other_fixed":  54242037
-      }
-    }
+  "ERM": {
+   "Rebar": {
+    "local_kt": 30.0,
+    "export_kt": 0.0,
+    "local_price_le_t": 9300.0,
+    "export_price_usd_t": 490.0
+   }
   },
-
-  "billet": {
-    "EZDK": {
-      "yields": { "eaf": 0.8599, "ccp": 0.9877 },
-      "blending_pct": { "dri": 0.60, "local_scrap": 0.12, "imported_scrap": 0.28, "home_scrap": 0.00, "pig_iron": 0.00 },
-      "trade_off_ratio": 1.169,
-      "eaf_consumptions_per_ton_ms": {
-        "aux_materials_kg":        0.4226,
-        "refractories_kg":        11.0,
-        "electrodes_kg":           2.58,
-        "other_fillers_kg":        1.0,
-        "electricity_eaf_lf_kwh": 693.3,
-        "electricity_aux_kwh":   240.0,
-        "natural_gas_nm3":        15.0,
-        "water_m3":                1.5,
-        "oxygen_nm3":             35.0,
-        "nitrogen_nm3":            4.0,
-        "argon_nm3":               0.0,
-        "handling_kg":             1.0,
-        "cutting_kg":              0.0,
-        "byproduct_pct_of_sc":    -0.0310387
-      },
-      "eaf_unit_prices_usd": {
-        "local_scrap_t":        136.81,
-        "imported_scrap_t":     270.22,
-        "byproduct_t":          352.50,
-        "aux_materials_kg":      59.40,
-        "refractories_kg":       28.54,
-        "electrodes_kg":       5841.40,
-        "other_fillers_kg":     233.46,
-        "electricity_kwh":        0.06,
-        "natural_gas_nm3":        0.2507,
-        "water_m3":               0.2716,
-        "oxygen_nm3":             0.1717,
-        "nitrogen_nm3":           0.1717,
-        "argon_nm3":              1.9284,
-        "handling_kg":            0.0,
-        "cutting_kg":             0.0
-      },
-      "bccm_consumptions_per_ton_billet": {
-        "byproduct_crops_pct_of_ms": -0.0026,
-        "aux_materials_kg": 0.00000302,
-        "refractories_kg":  1.84,
-        "electricity_kwh":  5.38,
-        "natural_gas_nm3":  6.70,
-        "water_m3":         0.50,
-        "oxygen_nm3":       3.48,
-        "nitrogen_nm3":     0.00,
-        "argon_nm3":        0.00
-      },
-      "bccm_unit_prices_usd": {
-        "byproduct_crops_t": 350.0,
-        "aux_materials_kg": 559.9,
-        "refractories_kg":  678.1,
-        "electricity_kwh":    0.06,
-        "natural_gas_nm3":    0.2507,
-        "water_m3":           0.30,
-        "oxygen_nm3":         0.17,
-        "nitrogen_nm3":       0.0,
-        "argon_nm3":          1.9
-      }
-    },
-    "EFS": {
-      "yields": { "eaf": 0.8482, "ccp": 0.9805 },
-      "blending_pct": { "dri": 0.70, "local_scrap": 0.209, "imported_scrap": 0.091, "home_scrap": 0.00, "pig_iron": 0.00 },
-      "trade_off_ratio": 1.016,
-      "_note": "Detailed EAF & BCCM consumptions reconstructed as dummies to satisfy summary-level output of 467.96 $/t"
-    },
-    "ESR": {
-      "yields": { "eaf": 0.8735, "ccp": 0.985 },
-      "blending_pct": { "dri": 0.20, "local_scrap": 0.16, "imported_scrap": 0.64, "home_scrap": 0.00, "pig_iron": 0.00 },
-      "trade_off_ratio": 1.017,
-      "_note": "Detailed EAF & BCCM consumptions reconstructed as dummies to satisfy summary-level output of 450.31 $/t"
-    },
-    "market": {
-      "market_price_usd_t": 590,
-      "components_usd_t": { "base": 428, "safe_guards": 74, "other_costs": 88 }
-    }
-  },
-
-  "finished_products": {
-    "Rebar": {
-      "EZDK": {
-        "rebar_yield": 0.9464,
-        "consumptions_per_ton_rebar": {
-          "refractories_kg":  0.72,
-          "electricity_kwh":100.0,
-          "natural_gas_nm3": 32.0,
-          "water_m3":         0.0,
-          "work_roll_usd_t":  1.37,
-          "byproduct_pct_of_billets_used": -0.043
-        },
-        "unit_prices_usd": {
-          "refractories_kg": 1192.0,
-          "electricity_kwh":    0.06,
-          "natural_gas_nm3":    0.25,
-          "water_m3":           0.27,
-          "byproduct_rejected_slabs_t": 318.94
-        }
-      },
-      "EFS": { "rebar_yield": 0.9709, "_note": "Use same consumption/price structure as EZDK; adjust to satisfy output 486.07 $/t Sc1" },
-      "ERM": { "rebar_yield": 0.9792, "_note": "ERM buys billet; sourcing is user-decision. Output 614.10 $/t Sc1 (market)" },
-      "ESR": { "rebar_yield": 0.9682, "_note": "Use same consumption/price structure; adjust to satisfy output 477.81 $/t Sc1" }
-    },
-    "Wire Rod": {
-      "EZDK": { "wire_yield": 0.9778, "_note": "Same formula as Rebar, EZDK only" }
-    },
-    "HRC": {
-      "EZDK": {
-        "yields": { "eaf": 0.8574, "tsc": 0.9852, "hsm": 0.9756 },
-        "blending_pct": { "dri": 0.80, "local_scrap": 0.1796, "imported_scrap": 0.0204 },
-        "eaf_eaf_lf_electricity_kwh_t_ms": 693.12,
-        "_note": "Three-stage EAF → TSC → HSM build, detail reconstructed as dummy to satisfy output 449.52 $/t"
-      },
-      "EFS": {
-        "yields": { "eaf": 0.8482, "tsc": 0.98, "hsm": 0.98 },
-        "blending_pct": { "dri": 0.70, "local_scrap": 0.21, "imported_scrap": 0.09 },
-        "eaf_eaf_lf_electricity_kwh_t_ms": 689.84,
-        "_note": "Three-stage EAF → TSC → HSM build, detail reconstructed as dummy to satisfy output 496.83 $/t"
-      }
-    }
-  },
-
-  "sales": {
-    "EZDK": {
-      "Rebar":    { "local_qty_ktons": 70, "export_qty_ktons":  0, "local_price_le_t": 8910, "export_price_usd_t": 500, "export_expense_usd_t": 0.0 },
-      "Wire Rod": { "local_qty_ktons": 40, "export_qty_ktons": 40, "local_price_le_t": 8860, "export_price_usd_t": 520, "export_expense_usd_t": 0.2 },
-      "HRC":      { "local_qty_ktons": 45, "export_qty_ktons":  0, "local_price_le_t": 8750, "export_price_usd_t": 540, "export_expense_usd_t": 0.8 }
-    },
-    "EFS": {
-      "Rebar":    { "local_qty_ktons": 60, "export_qty_ktons":  0, "local_price_le_t": 8860, "export_price_usd_t": 500, "export_expense_usd_t": 0.0 },
-      "HRC":      { "local_qty_ktons":  0, "export_qty_ktons": 75, "local_price_le_t": 8750, "export_price_usd_t": 521, "export_expense_usd_t": 0.15 }
-    },
-    "ERM": {
-      "Rebar":    { "local_qty_ktons":  0, "export_qty_ktons":  0, "local_price_le_t": 8860, "export_price_usd_t": 500, "export_expense_usd_t": 0.0 }
-    },
-    "ESR": {
-      "Rebar":    { "local_qty_ktons": 70, "export_qty_ktons":  0, "local_price_le_t": 8860, "export_price_usd_t": 500, "export_expense_usd_t": 0.0 }
-    }
-  },
-
-  "fixed_costs": {
-    "EZDK": {
-      "manufacturing_fixed_musd": 10.16,
-      "sga_musd":                  4.06,
-      "net_finance_musd":          8.03,
-      "depreciation_musd":         2.45,
-      "distribution_pct": { "DRI": 0, "Rebar": 25, "Wire Rod": 25, "HRC": 50 }
-    },
-    "EFS": {
-      "manufacturing_fixed_musd":  3.54,
-      "sga_musd":                  1.03,
-      "net_finance_musd":          1.88,
-      "depreciation_musd":         2.52,
-      "distribution_pct": { "DRI": 0, "Rebar": 50, "Wire Rod": 0, "HRC": 50 }
-    },
-    "ERM": {
-      "manufacturing_fixed_musd":  1.20,
-      "sga_musd":                  1.11,
-      "net_finance_musd":          3.85,
-      "depreciation_musd":         1.26,
-      "distribution_pct": { "DRI": 70, "Rebar": 30, "Wire Rod": 0, "HRC": 0 }
-    },
-    "ESR": {
-      "manufacturing_fixed_musd":  2.51,
-      "sga_musd":                  2.30,
-      "net_finance_musd":          2.12,
-      "depreciation_musd":         0.14,
-      "distribution_pct": { "DRI": 0, "Rebar": 100, "Wire Rod": 0, "HRC": 0 }
-    }
-  },
-
-  "market_shares": {
-    "Rebar":    { "total_local_market_ktons": 440 },
-    "Wire Rod": { "total_local_market_ktons":  60 },
-    "HRC":      { "total_local_market_ktons": null }
-  },
-
-  "intercompany": {
-    "dri_margin_usd_t": {
-      "ERM_to_EFS": 0.00,
-      "ERM_to_ESR": 7.54
-    }
+  "ESR": {
+   "Rebar": {
+    "local_kt": 70.0,
+    "export_kt": 0.0,
+    "local_price_le_t": 9300.0,
+    "export_price_usd_t": 490.0
+   }
   }
+ },
+ "total_local_market_kt": {
+  "Rebar": 525.0,
+  "Wire Rod": 75.0,
+  "HRC": null
+ },
+ "dri": {
+  "EZDK": {
+   "iop_landed_usd_t": 130.0,
+   "ng_price_usd_mmbtu": 5.5,
+   "mrmr": 1.5,
+   "capacity_t": 3000000.0,
+   "capacity_utilization": 1.0,
+   "selling_price_le_t": 6465.413290254993,
+   "selling_price_source": "cached value of external link 'DRI Cost'!E86",
+   "consumption": {
+    "electricity_kwh": 41.5875573743658,
+    "natural_gas_nm3": 292.58,
+    "oxygen_nm3": 14.353731974076737,
+    "nitrogen_nm3": 23.733239443711028,
+    "water_nm3": 1.1750577094378525,
+    "chemicals_t": 1.0,
+    "spare_parts_t": 0.0,
+    "external_services_t": 1.0,
+    "other_t": 1.0
+   },
+   "prices_le": {
+    "electricity_kwh": 0.9046276532269849,
+    "oxygen_nm3": 0.0001711771274817082,
+    "nitrogen_nm3": 0.6568663968622589,
+    "water_nm3": 3.978573060121251,
+    "chemicals_t": 24.77863512161735,
+    "spare_parts_t": 0.0,
+    "external_services_t": 42.724298537154915,
+    "other_t": 35.80221659634518
+   },
+   "fixed_le": {
+    "labor": 54011351.910000004,
+    "depreciation": 239746417.13999996,
+    "other_fixed": {
+     "total_le": 347999806.05,
+     "less_depreciation_le": 239746417.14
+    }
+   }
+  },
+  "ERM": {
+   "iop_landed_usd_t": 136.62,
+   "ng_price_usd_mmbtu": 5.5,
+   "mrmr": 1.43,
+   "capacity_t": 1900000.0,
+   "capacity_utilization": 1.0,
+   "selling_price_le_t": 6465.413290254993,
+   "selling_price_source": "cached value of external link 'DRI Cost'!G86",
+   "consumption": {
+    "electricity_kwh": 27.124498167211286,
+    "natural_gas_nm3": 333.0,
+    "oxygen_nm3": 14.353731974076737,
+    "nitrogen_nm3": 15.479442661129392,
+    "water_nm3": 1.1750577094378525,
+    "chemicals_t": 0.6522262878543217,
+    "spare_parts_t": 0.0,
+    "external_services_t": 0.6114531780610131,
+    "other_t": 1.0
+   },
+   "prices_le": {
+    "electricity_kwh": 0.9046276532269849,
+    "oxygen_nm3": 0.0001711771274817082,
+    "nitrogen_nm3": 0.6568663968622589,
+    "water_nm3": 3.8890995439578773,
+    "chemicals_t": 24.77863512161735,
+    "spare_parts_t": 0.0,
+    "external_services_t": 39.0,
+    "other_t": 0.0
+   },
+   "fixed_le": {
+    "labor": 54011351.910000004,
+    "depreciation": 239746417.13999996,
+    "other_fixed": {
+     "total_le": 347999806.05,
+     "less_depreciation_le": 239746417.14
+    }
+   }
+  }
+ },
+ "billet": {
+  "companies": {
+   "EZDK": {
+    "dri_margin_from_erm_usd_t": 0.0,
+    "local_scrap_usd_t": 300.0,
+    "imported_scrap_usd_t": 300.0,
+    "electricity_usd_kwh": 0.07,
+    "blend_pct": {
+     "dri": 80.0,
+     "local_scrap": 4.0,
+     "imported_scrap": 15.977
+    },
+    "eaf_yield_pct": 84.93,
+    "ccp_yield_pct": 99.38,
+    "eaf_lf_electricity_kwh_t_ms": 713.63,
+    "tradeoff_ratio": 1.0410868124585813
+   },
+   "EFS": {
+    "dri_margin_from_erm_usd_t": 1.6285248904469698,
+    "local_scrap_usd_t": 248.87,
+    "imported_scrap_usd_t": 267.27,
+    "electricity_usd_kwh": 0.07,
+    "blend_pct": {
+     "dri": 80.0,
+     "local_scrap": 14.0,
+     "imported_scrap": 5.978
+    },
+    "eaf_yield_pct": 84.17,
+    "ccp_yield_pct": 98.05,
+    "eaf_lf_electricity_kwh_t_ms": 708.39,
+    "tradeoff_ratio": 1.0384615384615383
+   },
+   "ESR": {
+    "dri_margin_from_erm_usd_t": 8.988524890446993,
+    "local_scrap_usd_t": {
+     "same_as": "EZDK"
+    },
+    "imported_scrap_usd_t": {
+     "same_as": "EZDK"
+    },
+    "electricity_usd_kwh": 0.007,
+    "blend_pct": {
+     "dri": 20.0,
+     "local_scrap": 16.0133,
+     "imported_scrap": 63.9867
+    },
+    "eaf_yield_pct": 87.35,
+    "ccp_yield_pct": 98.5,
+    "eaf_lf_electricity_kwh_t_ms": 597.1,
+    "tradeoff_ratio": 1.0404567699836869
+   }
+  },
+  "landed_cost_factor": 1.01741929376124,
+  "market_usd_t": {
+   "base": 428.0,
+   "safe_guards": 74.0,
+   "other_costs": 12.36
+  },
+  "tradeoff_overrides": {
+   "EZDK": {
+    "ERM": 429.88
+   }
+  }
+ },
+ "flat": {
+  "EZDK": {
+   "dri_margin_from_erm_usd_t": 0.0,
+   "local_scrap_usd_t": 248.87,
+   "imported_scrap_usd_t": 275.51,
+   "electricity_usd_kwh": 0.07,
+   "blend_pct": {
+    "dri": 80.0,
+    "local_scrap": 16.998,
+    "imported_scrap": 3.0
+   },
+   "eaf_yield_pct": 85.22,
+   "tsc_yield_pct": 98.73,
+   "hsm_yield_pct": 97.68,
+   "eaf_lf_electricity_kwh_t_ms": 693.12
+  },
+  "EFS": {
+   "dri_margin_from_erm_usd_t": 1.6285248904469614,
+   "local_scrap_usd_t": 248.87,
+   "imported_scrap_usd_t": 267.27,
+   "electricity_usd_kwh": 0.07,
+   "blend_pct": {
+    "dri": 80.0,
+    "local_scrap": 14.0,
+    "imported_scrap": 5.978
+   },
+   "eaf_yield_pct": 84.17,
+   "tsc_yield_pct": 98.0,
+   "hsm_yield_pct": 98.0,
+   "eaf_lf_electricity_kwh_t_ms": 708.39
+  }
+ },
+ "finishing_yield_pct": {
+  "Rebar": {
+   "EZDK": 93.62,
+   "EFS": 97.09,
+   "ERM": 97.91787249452645,
+   "ESR": 96.8227294447093
+  },
+  "Wire Rod": {
+   "EZDK": 97.61
+  }
+ },
+ "sourcing": {
+  "ERM_rebar_billet": "vc:EZDK"
+ },
+ "detail": {
+  "EZDK Rebar": {
+   "stage1": {
+    "blend_pct": {
+     "home_scrap": 0.0,
+     "pig_iron": 0.0
+    },
+    "byproduct_pct_of_solid_charge": -0.031038676250844593,
+    "consumption": {
+     "aux_materials_kg": 422.601588476686,
+     "refractories_kg": 10.508597530041635,
+     "electrodes_kg": 2.5805617152642326,
+     "other_fillers_kg": 1.2842586100701208,
+     "electricity_aux_kwh": 239.71538869801327,
+     "natural_gas_nm3": 14.59305401382995,
+     "water_m3": 1.5488840367719656,
+     "oxygen_nm3": 34.79748753864489,
+     "nitrogen_nm3": 4.0864981185504865,
+     "argon_nm3": 0.30455884119407506,
+     "handling_kg": 0.9868461249466488,
+     "cutting_kg": 0.0
+    },
+    "prices_usd": {
+     "home_scrap_t": 0.0,
+     "pig_iron_t": 0.0,
+     "byproduct_t": 352.50467887873486,
+     "aux_materials_kg": 59.397017556258064,
+     "refractories_kg": 919.7198626547731,
+     "electrodes_kg": 5841.4012540941,
+     "other_fillers_kg": 233.463515754561,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.17166474630834155,
+     "nitrogen_nm3": 0.17166474630834158,
+     "argon_nm3": 1.9283673168637039,
+     "handling_t": 0.0,
+     "cutting_t": 0.0
+    }
+   },
+   "stage2": {
+    "byproduct_pct_of_molten_steel": -0.002631984726906559,
+    "consumption": {
+     "aux_materials_kg": 0.003021438574240115,
+     "refractories_kg": 1.837549592597855,
+     "electricity_kwh": 5.383879813734355,
+     "natural_gas_nm3": 6.704507451126505,
+     "water_m3": 0.4983862928209065,
+     "oxygen_nm3": 3.4813015252394575,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 0.0007121962353565979
+    },
+    "prices_usd": {
+     "byproduct_t": 350.28906472110947,
+     "aux_materials_kg": 559.92857142857,
+     "refractories_kg": 678.1113568379643,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.17166474630834158,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 1.9283673168637039
+    }
+   },
+   "stage3": {
+    "feed_share": {
+     "produced": 1.0,
+     "local": 0.0,
+     "imported": 0.0
+    },
+    "byproduct_pct_of_feed": -0.0429671824854594,
+    "consumption": {
+     "refractories_kg": 0.7184245777221193,
+     "electricity_kwh": 99.81222249827461,
+     "natural_gas_nm3": 31.718429055837788,
+     "water_m3": 0.45277120002152066,
+     "work_roll_units": 1.0
+    },
+    "prices_usd": {
+     "local_feed_t": 0.0,
+     "imported_feed_t": 0.0,
+     "byproduct_t": 346.0049074670213,
+     "refractories_kg": 1192.134271671135,
+     "work_roll_unit": 0.23422318331098854
+    }
+   }
+  },
+  "EFS Rebar": {
+   "stage1": {
+    "blend_pct": {
+     "home_scrap": 0.0,
+     "pig_iron": 0.0
+    },
+    "byproduct_pct_of_solid_charge": -0.03456019358191833,
+    "consumption": {
+     "aux_materials_kg": 422.601588476686,
+     "refractories_kg": 10.508597530041635,
+     "electrodes_kg": 2.5805617152642326,
+     "other_fillers_kg": 1.2842586100701208,
+     "electricity_aux_kwh": 239.71538869801327,
+     "natural_gas_nm3": 14.59305401382995,
+     "water_m3": 1.5488840367719656,
+     "oxygen_nm3": 34.79748753864489,
+     "nitrogen_nm3": 4.0864981185504865,
+     "argon_nm3": 0.30455884119407506,
+     "handling_kg": 0.9868461249466488,
+     "cutting_kg": 0.0
+    },
+    "prices_usd": {
+     "home_scrap_t": 0.0,
+     "pig_iron_t": 0.0,
+     "byproduct_t": 352.50467887873486,
+     "aux_materials_kg": 70.36408065384602,
+     "refractories_kg": 1089.5369036583263,
+     "electrodes_kg": 8489.954234065033,
+     "other_fillers_kg": 233.463515754561,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.12203581545283093,
+     "nitrogen_nm3": 0.17166474630834158,
+     "argon_nm3": 1.9283673168637039,
+     "handling_t": 0.0,
+     "cutting_t": 0.0
+    }
+   },
+   "stage2": {
+    "byproduct_pct_of_molten_steel": -0.002631984726906559,
+    "consumption": {
+     "aux_materials_kg": 0.003021438574240115,
+     "refractories_kg": 1.837549592597855,
+     "electricity_kwh": 5.383879813734355,
+     "natural_gas_nm3": 6.704507451126505,
+     "water_m3": 0.4983862928209065,
+     "oxygen_nm3": 3.4813015252394575,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 0.0007121962353565979
+    },
+    "prices_usd": {
+     "byproduct_t": 350.28906472110947,
+     "aux_materials_kg": 559.92857142857,
+     "refractories_kg": 795.9715113165091,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.17166474630834158,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 1.9283673168637039
+    }
+   },
+   "stage3": {
+    "feed_share": {
+     "produced": 1.0,
+     "local": 0.0,
+     "imported": 0.0
+    },
+    "byproduct_pct_of_feed": -0.0203274432117428,
+    "consumption": {
+     "refractories_kg": 0.7184245777221193,
+     "electricity_kwh": 79.57633594973564,
+     "natural_gas_nm3": 22.202900339086458,
+     "water_m3": 0.45277120002152066,
+     "work_roll_units": 0.0
+    },
+    "prices_usd": {
+     "local_feed_t": 0.0,
+     "imported_feed_t": 0.0,
+     "byproduct_t": 345.8042374920664,
+     "refractories_kg": 1192.134271671135,
+     "work_roll_unit": 0.0
+    }
+   }
+  },
+  "EZDK Flat": {
+   "stage1": {
+    "blend_pct": {
+     "home_scrap": 0.0,
+     "pig_iron": 0.0
+    },
+    "byproduct_pct_of_solid_charge": -0.03267341082570191,
+    "consumption": {
+     "aux_materials_kg": 422.601588476686,
+     "refractories_kg": 10.508597530041635,
+     "electrodes_kg": 2.5805617152642326,
+     "other_fillers_kg": 1.2842586100701208,
+     "electricity_aux_kwh": 239.71538869801327,
+     "natural_gas_nm3": 14.59305401382995,
+     "water_m3": 1.5488840367719656,
+     "oxygen_nm3": 34.79748753864489,
+     "nitrogen_nm3": 4.0864981185504865,
+     "argon_nm3": 0.30455884119407506,
+     "handling_kg": 0.9868461249466488,
+     "cutting_kg": 0.0
+    },
+    "prices_usd": {
+     "home_scrap_t": 0.0,
+     "pig_iron_t": 0.0,
+     "byproduct_t": 352.50467887873486,
+     "aux_materials_kg": 66.35784187171166,
+     "refractories_kg": 916.6719902559797,
+     "electrodes_kg": 6438.550026282481,
+     "other_fillers_kg": 257.329784432117,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.15799750333485754,
+     "nitrogen_nm3": 0.17166474630834158,
+     "argon_nm3": 1.9283673168637039,
+     "handling_t": 0.0,
+     "cutting_t": 0.0
+    }
+   },
+   "stage2": {
+    "byproduct_pct_of_molten_steel": -0.002631984726906559,
+    "consumption": {
+     "aux_materials_kg": 0.003021438574240115,
+     "refractories_kg": 1.837549592597855,
+     "electricity_kwh": 5.383879813734355,
+     "natural_gas_nm3": 6.704507451126505,
+     "water_m3": 0.4983862928209065,
+     "oxygen_nm3": 3.4813015252394575,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 0.0007121962353565979
+    },
+    "prices_usd": {
+     "byproduct_t": 350.28906472110947,
+     "aux_materials_kg": 559.92857142857,
+     "refractories_kg": 1013.8652484208218,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.17166474630834158,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 1.9283673168637039
+    }
+   },
+   "stage3": {
+    "feed_share": {
+     "produced": 1.0,
+     "local": 0.0,
+     "imported": 0.0
+    },
+    "byproduct_pct_of_feed": -0.0429671824854594,
+    "consumption": {
+     "refractories_kg": 0.7184245777221193,
+     "electricity_kwh": 99.81222249827461,
+     "natural_gas_nm3": 31.718429055837788,
+     "water_m3": 0.45277120002152066,
+     "work_roll_units": 1.0
+    },
+    "prices_usd": {
+     "local_feed_t": 0.0,
+     "imported_feed_t": 0.0,
+     "byproduct_t": 350.580539114885,
+     "refractories_kg": 1192.134271671135,
+     "work_roll_unit": 0.0
+    }
+   }
+  },
+  "EFS Flat": {
+   "stage1": {
+    "blend_pct": {
+     "home_scrap": 0.0,
+     "pig_iron": 0.0
+    },
+    "byproduct_pct_of_solid_charge": -0.03267341082570191,
+    "consumption": {
+     "aux_materials_kg": 422.601588476686,
+     "refractories_kg": 10.508597530041635,
+     "electrodes_kg": 2.5805617152642326,
+     "other_fillers_kg": 1.2842586100701208,
+     "electricity_aux_kwh": 239.71538869801327,
+     "natural_gas_nm3": 14.59305401382995,
+     "water_m3": 1.5488840367719656,
+     "oxygen_nm3": 34.79748753864489,
+     "nitrogen_nm3": 4.0864981185504865,
+     "argon_nm3": 0.30455884119407506,
+     "handling_kg": 0.9868461249466488,
+     "cutting_kg": 0.0
+    },
+    "prices_usd": {
+     "home_scrap_t": 0.0,
+     "pig_iron_t": 0.0,
+     "byproduct_t": 352.50467887873486,
+     "aux_materials_kg": 83.69553072171487,
+     "refractories_kg": 1295.9647670404595,
+     "electrodes_kg": 6438.550026282481,
+     "other_fillers_kg": 257.329784432117,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.17166474630834155,
+     "nitrogen_nm3": 0.17166474630834158,
+     "argon_nm3": 1.9283673168637039,
+     "handling_t": 11.9200729825991,
+     "cutting_t": 0.0
+    }
+   },
+   "stage2": {
+    "byproduct_pct_of_molten_steel": -0.002631984726906559,
+    "consumption": {
+     "aux_materials_kg": 0.003021438574240115,
+     "refractories_kg": 1.837549592597855,
+     "electricity_kwh": 5.383879813734355,
+     "natural_gas_nm3": 6.704507451126505,
+     "water_m3": 0.4983862928209065,
+     "oxygen_nm3": 3.4813015252394575,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 0.0007121962353565979
+    },
+    "prices_usd": {
+     "byproduct_t": 350.28906472110947,
+     "aux_materials_kg": 559.92857142857,
+     "refractories_kg": 854.3920014508503,
+     "natural_gas_nm3": 0.25072464212651396,
+     "water_m3": 0.2716395510654938,
+     "oxygen_nm3": 0.17166474630834158,
+     "nitrogen_nm3": 0.0,
+     "argon_nm3": 1.9283673168637039
+    }
+   },
+   "stage3": {
+    "feed_share": {
+     "produced": 1.0,
+     "local": 0.0,
+     "imported": 0.0
+    },
+    "byproduct_pct_of_feed": -0.0429671824854594,
+    "consumption": {
+     "refractories_kg": 0.7184245777221193,
+     "electricity_kwh": 99.81222249827461,
+     "natural_gas_nm3": 31.718429055837788,
+     "water_m3": 0.45277120002152066,
+     "work_roll_units": 1.0
+    },
+    "prices_usd": {
+     "local_feed_t": 0.0,
+     "imported_feed_t": 0.0,
+     "byproduct_t": 350.580539114885,
+     "refractories_kg": 1192.134271671135,
+     "work_roll_unit": 0.23422318331098854
+    }
+   }
+  },
+  "ESR Rebar": {
+   "stage1": {
+    "blend_pct": {
+     "home_scrap": 0.0,
+     "pig_iron": 0.0
+    },
+    "byproduct_pct_of_solid_charge": -0.008011217677999073,
+    "electricity_extra_kwh": 15.7308917064777,
+    "consumption": {
+     "aux_materials_kg": 109.025912856941,
+     "refractories_kg": 7.67154239185428,
+     "electrodes_kg": 1.8285668504468275,
+     "consumables_kg": 1.0,
+     "natural_gas_nm3": 14.208494921973113,
+     "water_m3": 0.9946884485747385,
+     "oxygen_nm3": 22.875814202139754,
+     "nitrogen_nm3": 1.0835797333592643,
+     "chemicals_units": 1.0,
+     "handling_units": 1.0,
+     "cutting_units": 1.0
+    },
+    "prices_usd": {
+     "home_scrap_t": 0.0,
+     "pig_iron_t": 0.0,
+     "byproduct_t": {
+      "le": 6176.5
+     },
+     "aux_materials_kg": {
+      "le": 5924.76704651993
+     },
+     "refractories_kg": {
+      "le": 16540.4227713778
+     },
+     "electrodes_kg": {
+      "le": 221779.653102083
+     },
+     "consumables_kg": {
+      "le": 63205.0332834264
+     },
+     "natural_gas_nm3": {
+      "le": 4.28401851215912
+     },
+     "water_m3": {
+      "le": 9.1962943800284
+     },
+     "oxygen_nm3": {
+      "le": 3.18254566700526
+     },
+     "nitrogen_nm3": {
+      "le": 8.26736178405019
+     },
+     "chemicals_unit": {
+      "le": 3.15551479378521
+     },
+     "handling_unit": 2.3241757844129043,
+     "cutting_unit": 31.41622677823853
+    }
+   },
+   "stage3": {
+    "feed_share": {
+     "produced": 1.0,
+     "local": 0.0,
+     "imported": 0.0
+    },
+    "byproduct_pct_of_feed": -0.021355601084888,
+    "crops_t": 0.0,
+    "consumption": {
+     "refractories_kg": 0.0,
+     "electricity_kwh": 104.11270867186015,
+     "natural_gas_nm3": 29.333685695821817,
+     "water_m3": 0.5288289141643301,
+     "labels_rings_units": 1.0,
+     "chemicals_units": 1.0,
+     "tying_kg": 1.4443874184030443
+    },
+    "prices_usd": {
+     "imported_feed_t": 0.0,
+     "byproduct_t": 358.62619219348784,
+     "crops_t": 0.0,
+     "refractories_kg": 0.0,
+     "labels_rings_unit": {
+      "le": 14.3390542803325
+     },
+     "chemicals_unit": 4.34690057966502,
+     "tying_t": {
+      "le": 10406.4871874219
+     }
+    }
+   }
+  },
+  "ERM Rolling": {
+   "feed_share": {
+    "imported": 0.0,
+    "produced": 1.0,
+    "local": 0.0
+   },
+   "byproduct_pct_of_feed": -0.011671911347607856,
+   "consumption": {
+    "electricity_kwh": 106.20630183662952,
+    "natural_gas_nm3": 27.662824618334774,
+    "recycled_water_nm3": 0.8372528120776468,
+    "tying_kg": 1.6792739328535182,
+    "chemicals_kg": 0.6430820989416458,
+    "labels_rings_kg": 0.6430820989416451,
+    "spare_parts_kg": 0.0,
+    "external_services_kg": 1.0
+   },
+   "prices_le": {
+    "imported_billet_usd_t": 0.0,
+    "imported_extra_le_t": 0.0,
+    "local_billet_t": 0.0,
+    "byproduct_t": "billet_price",
+    "electricity_kwh": {
+     "usd": 0.07
+    },
+    "natural_gas_nm3": 4.281258524941543,
+    "recycled_water_nm3": 13.174887953448062,
+    "tying_kg": 11.249007407407401,
+    "chemicals_kg": 2.51536631403504,
+    "labels_rings_kg": 7.982560772941876,
+    "spare_parts_kg": 0.0,
+    "external_services_kg": 0.0
+   }
+  },
+  "EZDK Wire": {
+   "feed_share": {
+    "imported": 0.0,
+    "produced": 1.0,
+    "local": 0.0
+   },
+   "byproduct_pct_of_feed": -0.01844309545036382,
+   "consumption": {
+    "electricity_kwh": 117.84816152988833,
+    "natural_gas_nm3": 30.695099703303566,
+    "recycled_water_nm3": 0.929028719885717,
+    "tying_kg": 1.863348429138124,
+    "chemicals_kg": 0.713573881798763,
+    "labels_rings_kg": 0.7135738817987619,
+    "spare_parts_kg": 0.0,
+    "external_services_kg": 0.0
+   },
+   "prices_le": {
+    "imported_billet_usd_t": 0.0,
+    "imported_extra_le_t": 0.0,
+    "local_billet_t": 0.0,
+    "byproduct_t": 5132.926777653943,
+    "electricity_kwh": {
+     "usd": 0.07
+    },
+    "natural_gas_nm3": 4.281258524941543,
+    "recycled_water_nm3": 13.174887953448062,
+    "tying_kg": 11.249007407407401,
+    "chemicals_kg": 2.51536631403504,
+    "labels_rings_kg": 7.982560772941876,
+    "spare_parts_kg": 0.0,
+    "external_services_kg": 0.0
+   }
+  }
+ },
+ "fixed_cost": {
+  "EZDK": {
+   "manufacturing_musd": 9.93,
+   "sga_musd": 3.66,
+   "net_finance_musd": 6.99,
+   "depreciation_musd": 2.39,
+   "distribution_pct": {
+    "DRI": 0.0,
+    "Rebar": 25.0,
+    "Wire Rod": 25.0,
+    "HRC": 50.0
+   }
+  },
+  "EFS": {
+   "manufacturing_musd": 3.54,
+   "sga_musd": 0.26,
+   "net_finance_musd": 2.42,
+   "depreciation_musd": 2.52,
+   "distribution_pct": {
+    "DRI": 0.0,
+    "Rebar": 50.0,
+    "Wire Rod": 0.0,
+    "HRC": 50.0
+   }
+  },
+  "ERM": {
+   "manufacturing_musd": 1.17,
+   "sga_musd": 0.84,
+   "net_finance_musd": 4.52,
+   "depreciation_musd": 1.24,
+   "distribution_pct": {
+    "DRI": 70.0,
+    "Rebar": 30.0,
+    "Wire Rod": 0.0,
+    "HRC": 0.0
+   }
+  },
+  "ESR": {
+   "manufacturing_musd": 2.45,
+   "sga_musd": 2.38,
+   "net_finance_musd": 5.17,
+   "depreciation_musd": 0.13,
+   "distribution_pct": {
+    "DRI": 0.0,
+    "Rebar": 100.0,
+    "Wire Rod": 0.0,
+    "HRC": 0.0
+   }
+  }
+ },
+ "pnl": {
+  "export_expense_rate": {
+   "EZDK": {
+    "Rebar": 0.0,
+    "Wire Rod": 0.2,
+    "HRC": 0.8
+   },
+   "EFS": {
+    "Rebar": 0.0,
+    "HRC": 0.15
+   },
+   "ERM": {
+    "Rebar": 0.0
+   },
+   "ESR": {
+    "Rebar": 0.0
+   }
+  },
+  "intercompany_gain_dri_musd": {
+   "ERM": 0.17
+  }
+ }
 }
