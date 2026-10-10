@@ -1,7 +1,6 @@
 """Step 2 — state manager.  Done-criterion (system prompt, Appendix C): round-trip
 save-load-diff works for baselines and scenarios; the state schema is enforced."""
 
-import copy
 import datetime as dt
 import json
 import os

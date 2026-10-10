@@ -1403,4 +1403,11 @@ def key_figures(outputs: dict) -> dict:
     k["ERM billet price $/t"] = outputs["sourcing"]["price_usd_t"]
     for name, v in outputs.get("capacity", {}).get("items", {}).items():
         k[f"Capacity {name} %"] = v["utilisation_pct"]
+    for co, items in outputs["production"]["summary"].items():
+        for item, v in items.items():
+            if isinstance(v, (int, float)):
+                k[f"Production {co} {item} kt"] = v
+    for co in COMPANIES:
+        f = outputs["fixed_cost"]["usd_m"][co]
+        k[f"Fixed {co} total (incl. dep.) M$"] = f["total_with_dep"]
     return k

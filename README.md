@@ -26,6 +26,8 @@ electricity price.
 | `model_fixes.py` | Workbook → corrected state, and the fix-by-fix bridge. |
 | `state_manager.py` | **Step 2.** Baselines, scenarios and the live working session in SQLite. |
 | `state_schema.py` | What a valid state is; dotted paths; the structured errors every tool returns. |
+| `tools.py` | **Step 3.** The assistant's 14 tools, with their argument schemas (`TOOL_SPECS`). |
+| `refresh_template.py` | The seven-sheet monthly refresh template (Appendix D), and the XLSX / CSV parsers. |
 | `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
 | `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
 | `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
@@ -98,6 +100,46 @@ store.runtime_header()   # "Current state: baseline 2026-04 loaded, 1 scenarios 
   (`invalid_path`, `structural_non_existence`, `schema_validation_error`,
   `integrity_check_failed`, …). Capacity overruns are warnings.
 
+## Step 3 — the 14 tools (`tools.py`)
+
+```python
+from tools import ToolBox
+box = ToolBox(store)                         # mode="orchestrator" for Fantomaas
+box.call("get_pnl", {"scope": "consolidated", "currency": "EGP", "period": "annual"})
+box.call("get_cost_sheet", {"stage": "billet", "company": "all", "view": "detailed"})
+box.call("run_sensitivity", {"input_path": "sales.ESR.Rebar.local_price_le_t",
+         "variation": {"type": "range", "from": 8000, "to": 11000, "steps": 7},
+         "output_metric": "ebt", "company": "ESR"})          # → EBT turns positive at 10,965 LE/t
+box.call("manage_baseline_refresh", {"action": "generate_template"})   # seven-sheet XLSX
+box.call("manage_baseline_refresh", {"action": "commit", "source": "xlsx", "file_path": "filled.xlsx"})
+```
+
+| # | Tool | What it returns |
+|---|---|---|
+| 1 | `update_input` | old → new, impact on key figures, affected reports, an ERM supplier switch if one happens |
+| 2 | `read_state` | any slice of any stored state |
+| 3 | `list_states` | baselines / scenarios, filterable |
+| 4 | `get_cost_sheet` | DRI, billet, or finished-product cost sheet: detailed, conversion summary, inputs side by side |
+| 5 | `get_pnl` | standalone (products + intercompany + sub-total) or consolidated with eliminations; monthly or annual; USD or EGP |
+| 6 | `get_sales_report` | volumes, mix, prices, market share (HRC market size asked at each run, never stored) |
+| 7 | `get_fixed_cost_report` | amounts, per ton, allocation |
+| 8 | `get_production_report` | cascade, summary with capacity use, flow diagram (nodes, edges and Mermaid), full plan |
+| 9 | `get_tradeoff_matrix` | every source × buyer, cheapest per buyer, ERM's current source |
+| 10 | `run_sensitivity` | input × output table with zero crossings; failing points flagged, not dropped |
+| 11 | `compare_states` | input diffs and output deltas, focus and threshold filters |
+| 12 | `find_optimal_mix` | registered but **hidden until Step 8**: it ships only after its four verification cases pass (Appendix D.3) |
+| 13 | `manage_baseline_refresh` | template generation; commit from XLSX, CSV or a full state (direct user only) |
+| 14 | `commit_state` | promote (direct user only), save as scenario, discard |
+
+- **Tables are data:** columns, rows with unit and kind, footnotes, and optional chart data.
+  Numbers are kept at full precision; the display layer rounds them (Step 6).
+- **Every number comes from the engine** (tested). Reports refuse a state that fails an
+  error-level integrity check, and refuse steps a company doesn't have, explaining why.
+  A "company: all" report shows only the producers, with a footnote naming the others.
+- **Refresh template.** Every input appears exactly once across the seven sheets, as
+  Last month / This month / % change, with sum-to-100 check cells. A blank cell means
+  "unchanged", so a filled template always commits a complete month.
+
 ## Tests
 
 ```
@@ -112,4 +154,4 @@ sourcing decision in state, integrity checks, `compute_all`. The corrected model
 does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
 P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
 (§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
-Next step per the brief: Step 3, `tools.py` (the 14 tools on top of the engine and the state manager).
+Next step per the brief: Step 4, `llm_router.py` (Claude picks and calls the tools from natural language).

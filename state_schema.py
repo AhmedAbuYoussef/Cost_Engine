@@ -42,7 +42,7 @@ ERROR_CODES = (
     "missing_required_arg", "invalid_path", "structural_non_existence",
     "integrity_check_failed", "capacity_exceeded", "infeasible_optimization",
     "baseline_not_found", "scenario_not_found", "state_not_found", "baseline_exists",
-    "permission_denied", "schema_validation_error", "nothing_to_undo",
+    "permission_denied", "schema_validation_error", "nothing_to_undo", "tool_unavailable",
 )
 
 
