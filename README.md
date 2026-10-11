@@ -28,6 +28,8 @@ electricity price.
 | `state_schema.py` | What a valid state is; dotted paths; the structured errors every tool returns. |
 | `tools.py` | **Step 3.** The assistant's 14 tools, with their argument schemas (`TOOL_SPECS`). |
 | `refresh_template.py` | The seven-sheet monthly refresh template (Appendix D), and the XLSX / CSV parsers. |
+| `llm_router.py` | **Step 4.** Claude picks and calls the tools, then answers. Includes a terminal session. |
+| `llm_sim.py` | A simulated Claude (same API surface) for running and testing without an API key. |
 | `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
 | `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
 | `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
@@ -140,6 +142,40 @@ box.call("manage_baseline_refresh", {"action": "commit", "source": "xlsx", "file
   Last month / This month / % change, with sum-to-100 check cells. A blank cell means
   "unchanged", so a filled template always commits a complete month.
 
+## Step 4 — Claude on top of the tools (`llm_router.py`)
+
+```bash
+python llm_router.py --simulate           # terminal session, no API key (simulated Claude)
+python llm_router.py                      # real Claude: needs ANTHROPIC_API_KEY or `ant auth login`
+python llm_router.py --mode orchestrator  # Fantomaas permissions
+```
+
+```python
+from llm_router import Router
+router = Router(ToolBox(store))                     # or Router(ToolBox(store), client=SimulatedClaude())
+reply = router.ask("What is the consolidated EBT this month?")
+reply.text          # the answer (markdown tables, source line)
+reply.tool_calls    # [{name, input, status, error_code, ms}]
+reply.usage         # tokens, including cache reads
+```
+
+- **Claude never calculates.** Every number comes from a tool result. Claude picks the tool,
+  reads the result, and explains it.
+- **The system prompt is the runtime part of `ezz_steel_bot_system_prompt_v2.md`** (sections 1–5;
+  the revision notes and build appendices are left out), plus implementation notes generated from
+  the code: caller mode, real state paths, display rounding, how to treat warnings, supplier
+  switches and `needs_input`. The runtime header rides on the first turn.
+- **Request:** Claude Opus 5.5 at effort `high` (financial accuracy; this model's default is
+  `medium`), adaptive thinking, cached system prompt and tools, automatic `tool_choice`, and
+  server-side refusal fallback (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`).
+  Pass `use_fallbacks=False` to turn the fallback off.
+- **A manual tool-use loop.** Each call goes through the ToolBox with the session's permission
+  mode. Several calls in one turn return their results together. Errors go back to Claude marked
+  `is_error`, so it can correct itself. The history is append-only (Claude's responses are stored
+  exactly as returned), and the number of tool rounds is capped.
+- **Testing.** Loop mechanics are tested with a scripted client, and answers end to end with the
+  simulated Claude. `tests/test_llm_live.py` runs real Claude once credentials are configured.
+
 ## Tests
 
 ```
@@ -154,4 +190,5 @@ sourcing decision in state, integrity checks, `compute_all`. The corrected model
 does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
 P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
 (§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
-Next step per the brief: Step 4, `llm_router.py` (Claude picks and calls the tools from natural language).
+Next step per the brief: Step 5, `session_manager.py` (session persistence of the conversation itself,
+currency preference, and the resume flow).

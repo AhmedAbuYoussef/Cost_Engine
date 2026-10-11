@@ -703,7 +703,8 @@ class ToolBox:
             rows.append(_row("Total local market", {p: mkt[p] for p in products}, "kt", "qty"))
             rows.append(_row("Ezz Steel market share", {p: _div_pct(group[p], mkt[p]) for p in products}, "%", "pct"))
             for c in COMPANIES:
-                if company not in ("all", c):
+                # only companies that make at least one of the products shown (§5: no empty rows)
+                if company not in ("all", c) or not any(c in PRODUCTION_MATRIX[p] for p in products):
                     continue
                 rows.append(_row(f"{c} share of group local sales",
                                  {p: (_div_pct(state["sales"][c][p]["local_kt"], group[p])
