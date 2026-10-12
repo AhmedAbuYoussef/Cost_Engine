@@ -155,6 +155,7 @@ class Reply:
     tool_calls: list = field(default_factory=list)
     rounds: int = 0
     usage: dict = field(default_factory=dict)
+    results: list = field(default_factory=list)     # this turn's full tool results, in call order (not stored)
 
 
 class Router:
@@ -196,7 +197,7 @@ class Router:
         self.tool_log.append(entry)
         return {"type": "tool_result", "tool_use_id": _get(block, "id"),
                 "content": json.dumps(_round_floats(result), ensure_ascii=False, separators=(",", ":")),
-                **({"is_error": True} if result.get("status") == "error" else {})}, entry
+                **({"is_error": True} if result.get("status") == "error" else {})}, entry, result
 
     def ask(self, text: str, notes=()) -> Reply:
         """One user turn: Claude may call tools several times before answering.  ``notes`` are
@@ -205,7 +206,7 @@ class Router:
         if not self.messages:                       # runtime header, first turn only
             content.insert(0, {"type": "text", "text": f"[Runtime header] {self.toolbox.store.runtime_header()}"})
         self.messages.append({"role": "user", "content": content})
-        calls, usage = [], {}
+        calls, usage, full = [], {}, []
         for rounds in range(1, self.max_tool_rounds + 1):
             if self.use_fallbacks:
                 response = self.client.beta.messages.create(**self._request())
@@ -219,9 +220,10 @@ class Router:
                 results = []
                 for b in blocks:
                     if _get(b, "type") == "tool_use":
-                        r, entry = self._run_tool(b)
+                        r, entry, result = self._run_tool(b)
                         results.append(r)
                         calls.append(entry)
+                        full.append(result)
                 self.messages.append({"role": "user", "content": results})   # all results, one turn
                 continue
             if stop == "pause_turn":
@@ -233,9 +235,9 @@ class Router:
                 text_out = text_out or ("I can't help with that request" + (f" ({cat})." if cat else "."))
             elif stop == "max_tokens":
                 text_out += "\n\n(The answer was cut off at the length limit — ask me to continue.)"
-            return Reply(text_out, stop, calls, rounds, usage)
+            return Reply(text_out, stop, calls, rounds, usage, full)
         return Reply(f"I stopped after {self.max_tool_rounds} rounds of tool calls without a final answer. "
-                     "Please narrow the question.", "tool_round_limit", calls, self.max_tool_rounds, usage)
+                     "Please narrow the question.", "tool_round_limit", calls, self.max_tool_rounds, usage, full)
 
 
 def _add_usage(total: dict, usage) -> None:

@@ -195,6 +195,17 @@ class SessionManager:
             self._close(ended[-1]["input"]["action"])
         return reply
 
+    def end(self, reason: str = "closed_by_caller") -> bool:
+        """Close the active conversation (e.g. the orchestrator starting an unrelated task).  The
+        working state is untouched.  Returns False when there was nothing to close."""
+        if self.router is None and self._active() is None:
+            return False
+        if self.router is None:
+            self._load()
+        self._close(reason)
+        self._prefs = dict(DEFAULT_PREFERENCES)
+        return True
+
     @property
     def preferences(self) -> dict:
         return dict(self._prefs)

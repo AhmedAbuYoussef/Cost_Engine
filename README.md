@@ -33,6 +33,7 @@ electricity price.
 | `session_manager.py` | **Step 5.** The conversation as a durable session: saved turns, currency preference, resume. |
 | `app.py` | **Step 6.** The web interface (Gradio): chat, charts, comparisons, the resume question. |
 | `ui_render.py` | The display layer: number formatting, SVG charts, flow diagram, heatmap, colour-coded comparisons. |
+| `orchestrator_api.py` | **Step 7.** The Fantomaas entry point: JSON in, JSON out, baseline commits refused. |
 | `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
 | `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
 | `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
@@ -245,6 +246,62 @@ Then open http://127.0.0.1:7860. Options: `--db` (default `ezz_model.db`), `--po
   - The saved scenarios.
 - Light and dark mode (follows the system; `?__theme=dark` forces it).
 
+## Step 7 — the orchestrator API (`orchestrator_api.py`)
+
+The entry point for Fantomaas. Whoever comes in through it is the orchestrator: no field, header or
+argument can make a request count as the direct user.
+
+```
+python orchestrator_api.py --serve [--port 8765] [--token …]    # HTTP; interactive docs at /docs
+python orchestrator_api.py --stdin                               # one JSON request per line → one JSON reply per line
+```
+
+```python
+from orchestrator_api import OrchestratorAPI
+api = OrchestratorAPI(StateStore("ezz_model.db"))               # or (store, SimulatedClaude(), use_fallbacks=False)
+api.handle({"tool": "update_input", "args": {"path": "sales.EZDK.Rebar.local_kt", "value": 120}})
+api.handle({"calls": [{"tool": "update_input", "args": {…}}, {"tool": "get_pnl", "args": {"scope": "consolidated"}}]})
+api.handle({"instruction": "Raise EZDK rebar sales to 120 kt and report group EBT"})   # through Claude
+```
+
+| Request | What happens |
+|---|---|
+| `{"tool", "args"}` | One tool, called directly. No language model involved, so the result is deterministic. |
+| `{"calls": [...]}` | Several tools in order, stopping at the first error. Not a transaction: earlier writes stay. |
+| `{"instruction", "new_conversation"?}` | Claude in orchestrator mode (no confirmations, JSON answers) has its own conversation on the shared working state. |
+
+Every reply has the §4 shape. The figures in `result` always come from the tool results, never from
+Claude's text (Rule 1).
+
+```json
+{"status": "ok | error | needs_input", "tool_called": "update_input", "result": {…}, "error": null,
+ "integrity_checks": "passed | failed: <checks> | not_run", "warnings": [{"check", "detail"}], "request_id": …}
+```
+
+- **Permission model B.** These are refused with `permission_denied` before anything runs:
+  - `commit_state` with `promote_to_baseline`;
+  - every action of `manage_baseline_refresh`.
+
+  The ToolBox (orchestrator mode) and the StateStore (actor `orchestrator`) refuse them again. The
+  orchestrator *can* update the working state, run every report and analysis, undo, and save or
+  discard scenarios.
+- **Warnings** include capacity overruns and ERM switching billet supplier. They never block.
+- **HTTP endpoints:**
+  - `GET /v1/health`, `GET /v1/tools` (what may be called, with schemas, and what is refused),
+    `GET /v1/state`;
+  - `POST /v1/tools/{name}` (body = the arguments), `POST /v1/requests` (any of the three
+    request types).
+- **HTTP status codes:**
+  - 200 for every processed request, including tool errors (read `status`);
+  - 403 for `permission_denied`;
+  - 400 for a malformed request;
+  - 401 for a missing or wrong token.
+
+  With `--token` / `FANTOMAAS_API_TOKEN`, every request needs `Authorization: Bearer <token>`.
+  Serving beyond localhost without a token is refused.
+- **Shared working state.** The orchestrator's amendments show up in the user's session. The change
+  log records them with actor `orchestrator`, and the user's next visit offers to resume them.
+
 ## Tests
 
 ```
@@ -259,4 +316,5 @@ sourcing decision in state, integrity checks, `compute_all`. The corrected model
 does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
 P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
 (§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
-Next step per the brief: Step 7, the orchestrator API (`orchestrator_api.py`) for Fantomaas.
+Next step per the brief: Step 8, the optimizer (`find_optimal_mix`): the LP formulation first, then
+the solver, shipped only after its four verification cases pass (Appendix D.1–D.4).
