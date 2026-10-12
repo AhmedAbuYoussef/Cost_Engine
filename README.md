@@ -31,6 +31,8 @@ electricity price.
 | `llm_router.py` | **Step 4.** Claude picks and calls the tools, then answers. Includes a terminal session. |
 | `llm_sim.py` | A simulated Claude (same API surface) for running and testing without an API key. |
 | `session_manager.py` | **Step 5.** The conversation as a durable session: saved turns, currency preference, resume. |
+| `app.py` | **Step 6.** The web interface (Gradio): chat, charts, comparisons, the resume question. |
+| `ui_render.py` | The display layer: number formatting, SVG charts, flow diagram, heatmap, colour-coded comparisons. |
 | `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
 | `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
 | `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
@@ -207,6 +209,42 @@ reply = session.ask("Show the consolidated P&L")
 - `python llm_router.py [--simulate]` runs a terminal session on top of this, so closing and
   reopening the terminal resumes the same way.
 
+## Step 6 — the web interface (`app.py`)
+
+```
+pip install -r requirements.txt
+python app.py --simulate        # try it without an API key (keyword rules stand in for Claude)
+python app.py                   # with Claude: ANTHROPIC_API_KEY set, or `ant auth login`
+```
+
+Then open http://127.0.0.1:7860. Options: `--db` (default `ezz_model.db`), `--port`, `--host`,
+`--share` (a temporary public link), `--model`, `--effort`.
+
+- **Chat.** Ask in plain language. Every answer shows the tools it used: one collapsible line each,
+  with the arguments, and errors flagged. Claude writes the tables. Under the answer, the page draws
+  what markdown cannot, always from that turn's tool results, never re-computed:
+  - **Charts**: stacked cost bars with totals on top, EBT bars, sales volumes, fixed costs,
+    sensitivity lines with the zero crossing marked. Hover any bar or point for its value.
+  - **Production flow**: IOP → DRI → melt shop → billets/slabs → products, with link width
+    proportional to tonnage and one colour per company.
+  - **Trade-off heatmap**: the cheapest source per buyer marked ✓.
+  - **Comparisons** (`compare_states`): ▲/▼ with green = better and red = worse (EBT up is good,
+    cost up is bad). Volumes and inputs are shown neutral.
+- **Numbers** follow the Rendering Rules:
+  - money in M with 2 decimals, negatives in parentheses;
+  - per-ton values to 2 decimals in USD, 0 in LE;
+  - kt to 1 decimal;
+  - percentages to 0 decimals (1 below 10%).
+- **Open or reload the page.** The conversation is redrawn. With unsaved changes, the assistant
+  asks Pattern F's question, with one-click answers: *Resume*, *Save it as a scenario*, *Discard it*.
+- **Side panel.**
+  - The baseline, the number of scenarios, and each unsaved change (input: baseline → now).
+  - The **currency** used when a question names none. It also follows what you last asked for.
+  - **Undo last change** and **Compare with baseline**. Both go through the assistant, so the
+    conversation records them.
+  - The saved scenarios.
+- Light and dark mode (follows the system; `?__theme=dark` forces it).
+
 ## Tests
 
 ```
@@ -221,5 +259,4 @@ sourcing decision in state, integrity checks, `compute_all`. The corrected model
 does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
 P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
 (§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
-Next step per the brief: Step 6, the Gradio web interface (chat, rendered tables and charts, the
-resume prompt on open).
+Next step per the brief: Step 7, the orchestrator API (`orchestrator_api.py`) for Fantomaas.

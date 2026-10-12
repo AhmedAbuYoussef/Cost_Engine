@@ -107,6 +107,13 @@ def build_system_prompt(mode: str, state: dict) -> str:
   The session remembers the last one asked for and applies it to later reports (Rule 5); results then
   carry `currency_from_preference`, which you mention briefly. Money in the state is USD unless the key says `le`, or
   the value is written `{{"le": x}}`.
+- **What the interface draws for you** (user mode). Below your answer, the web page draws:
+  - every chart a tool returns (pass `include_chart: true` when the user accepts your offer of a chart);
+  - the production flow diagram;
+  - the trade-off matrix as a heatmap;
+  - `compare_states` results as a colour-coded table.
+  Do not reproduce the Mermaid text or describe the chart's look. For a comparison, give a short
+  summary of the main moves rather than the full table.
 - **State paths** (dotted; use `read_state` on a section to see its exact keys):
 {_path_catalogue(state)}
 """

@@ -210,9 +210,9 @@ def _units(currency):
             "price": "$" if usd else "LE"}
 
 
-def _stacked_chart(title, categories, series, total_label=True):
+def _stacked_chart(title, categories, series, unit, kind, total_label=True):
     """Chart data for the display layer (rulebook §9.2) — never a rendered image."""
-    return {"type": "stacked_bar", "title": title, "categories": list(categories),
+    return {"type": "stacked_bar", "title": title, "categories": list(categories), "unit": unit, "kind": kind,
             "series": [{"name": n, "values": list(v)} for n, v in series], "total_labels": total_label}
 
 
@@ -399,7 +399,8 @@ class ToolBox:
                 s = lambda key: [out["dri"][c]["summary_usd_t"][key] * k for c in cos]
                 t["chart"] = _stacked_chart("DRI cost per ton", cos, [("Material", s("material_price")),
                                             ("MRMR effect", s("mrmr_effect")),
-                                            ("Other conversion", s("other_conversion"))])
+                                            ("Other conversion", s("other_conversion"))],
+                                            u["per_t"], "per_t")
             return {"status": "ok", "table": t}
         if view == "inputs_side_by_side":
             keys = list(state["dri"][cos[0]]["consumption"])
@@ -476,7 +477,8 @@ class ToolBox:
                 s = lambda key: [out["billet"][c][key] * k for c in cos]
                 t["chart"] = _stacked_chart("Billet cost per ton", cos, [("Material", s("material_price")),
                                             ("Yield effect", s("yield_effect")),
-                                            ("Other conversion", s("other_conversion"))])
+                                            ("Other conversion", s("other_conversion"))],
+                                            u["per_t"], "per_t")
             return {"status": "ok", "table": t}
         if view == "inputs_side_by_side":
             rows = []
@@ -540,7 +542,8 @@ class ToolBox:
                     s = lambda key: [out["flat"][c][key] * k for c in cos]
                     t["chart"] = _stacked_chart("HRC cost per ton", cos, [("Material", s("material_price")),
                                                 ("Yield effect", s("yield_effect")),
-                                                ("Other conversion", s("other_conversion"))])
+                                                ("Other conversion", s("other_conversion"))],
+                                            u["per_t"], "per_t")
                 return {"status": "ok", "table": t}
             data = out["rebar"] if product == "Rebar" else out["wire"]
             rows = []
@@ -566,7 +569,8 @@ class ToolBox:
                 t["chart"] = _stacked_chart(f"{product} cost per ton (Sc1)", cos,
                                             [("Material", s("material_price")), ("Yield effect", s("yield_effect")),
                                              ("Home scrap", s("home_scrap_deduction")),
-                                             ("Other conversion", s("other_conversion"))])
+                                             ("Other conversion", s("other_conversion"))],
+                                            u["per_t"], "per_t")
             return {"status": "ok", "table": t}
         sheets = {c: _finished_sheet_name(c, product) for c in cos}
         if view == "inputs_side_by_side":
@@ -653,7 +657,7 @@ class ToolBox:
             if include_chart:
                 prod = [k for k in keys if not k.endswith("Sub-Total")]
                 t["chart"] = {"type": "bar", "title": f"{company} EBT by product ({u['money']})",
-                              "categories": [names[k] for k in prod],
+                              "categories": [names[k] for k in prod], "unit": u["money"], "kind": "money",
                               "series": [{"name": "EBT", "values": [cols[k]["ebt"] for k in prod]}]}
             return {"status": "ok", "table": t}
         con = out["consolidated"][variant]
@@ -683,6 +687,7 @@ class ToolBox:
         t = _table(f"Consolidated P&L per {span}", columns, rows, source=src, currency=currency, footnotes=foot)
         if include_chart:
             t["chart"] = {"type": "bar", "title": f"EBT by company ({u['money']})", "categories": columns,
+                          "unit": u["money"], "kind": "money",
                           "series": [{"name": "EBT", "values": [r for r in
                                       [next(x for x in rows if x.get("key") == "ebt")["values"][c] for c in columns]]}]}
         return {"status": "ok", "table": t}
@@ -758,7 +763,8 @@ class ToolBox:
         t = _table(f"Sales — {view.replace('_', ' ')}", columns, rows, source=src, currency=currency, footnotes=foot)
         if include_chart:
             t["chart"] = _stacked_chart("Sales volume (kt)", columns, [
-                ("Local", [s["local_kt"] for s in sl.values()]), ("Export", [s["export_kt"] for s in sl.values()])])
+                ("Local", [s["local_kt"] for s in sl.values()]), ("Export", [s["export_kt"] for s in sl.values()])],
+                "kt", "qty")
         return {"status": "ok", "table": t}
 
     def get_fixed_cost_report(self, company, view="full_amount", currency="USD", include_chart=False,
@@ -781,7 +787,7 @@ class ToolBox:
             t = _table("Fixed costs per month", cos, rows, source=src, currency=currency)
             if include_chart:
                 t["chart"] = _stacked_chart("Fixed costs", cos, [(label, [fc["usd_m"][c][key] * k for c in cos])
-                                                                 for key, label in lines])
+                                                                 for key, label in lines], u["money"], "money")
             return {"status": "ok", "table": t}
         if view == "allocation_only":
             cols = [f"{c} {p}" for c in cos for p in ("DRI", "Rebar", "Wire Rod", "HRC")
@@ -910,7 +916,7 @@ class ToolBox:
         if include_chart:
             res["chart"] = {"type": "line", "title": f"{output_metric} of {col} vs {input_path}",
                             "x": [p["input"] for p in rows], "y": [p["output"] for p in rows],
-                            "markers": crossings}
+                            "markers": crossings, "unit": metric[1], "x_label": input_path}
         return res
 
     def compare_states(self, state_a_id, state_b_id, comparison_type="both", output_focus=None,

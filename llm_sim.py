@@ -19,6 +19,8 @@ import json
 import re
 from types import SimpleNamespace
 
+from ui_render import fmt
+
 COMPANIES = ("EZDK", "EFS", "ERM", "ESR")
 _ids = itertools.count(1)
 
@@ -76,22 +78,35 @@ def _currency(q):
     return {}
 
 
+_CHART_TOOLS = {"get_cost_sheet", "get_pnl", "get_sales_report", "get_fixed_cost_report", "run_sensitivity"}
+
+
 def plan(question: str):
     """(tool name, arguments) for a question, or None when the intent is unclear."""
+    p = _plan(question)
+    if p and p[0] in _CHART_TOOLS and re.search(r"\b(chart|graph|plot|visual)", question, re.I):
+        p[1]["include_chart"] = True
+    return p
+
+
+def _plan(question: str):
     q = question.lower()
     co, prod, cur = _company(q), _product(q), _currency(q)
     m = re.search(r"\bset\s+([\w .]+?)\s+to\s+(-?[\d.]+)", question, re.I)
     if m:
         return "update_input", {"path": m.group(1).strip(), "value": float(m.group(2))}
-    m = re.search(r"save (?:this |it )?as (?:a )?scenario\s+['\"]?([^'\"]+)['\"]?", question, re.I)
+    m = re.search(r"save (?:this |it )?as (?:a )?scenario(?:\s+(?:named|called))?(?:\s+['\"]?([^'\"]+)['\"]?)?",
+                  question, re.I)
     if m:
-        return "commit_state", {"action": "save_as_scenario", "name": m.group(1).strip()}
+        return "commit_state", {"action": "save_as_scenario", "name": (m.group(1) or "In-progress session").strip()}
     m = re.search(r"sensitivity of ([\w .]+?) on (ebt|cm|breakeven_qty|cm_per_ton)", q)
     if m:
         return "run_sensitivity", {"input_path": _restore_case(question, m.group(1)),
                                    "variation": {"type": "delta_pct", "values": [-10, -5, 0, 5, 10]},
                                    "output_metric": m.group(2), "company": co or "EZDK",
                                    **({"product": prod} if prod else {})}
+    if re.search(r"\bdiscard\b", q):
+        return "commit_state", {"action": "discard"}
     if re.search(r"\b(undo|revert|go back)\b", q):
         return "undo_last_change", {}
     if "scenario" in q and ("list" in q or "saved" in q or "which" in q):
@@ -144,19 +159,7 @@ def _restore_case(original: str, lowered: str) -> str:
 # --------------------------------------------------------------------------- #
 
 def _fmt(v, kind, unit):
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return v
-    if kind == "pct":
-        return f"{v:,.1f}%" if abs(v) < 10 else f"{v:,.0f}%"
-    if kind == "qty":
-        return f"{v:,.1f}"
-    if kind in ("per_t", "price") and unit.startswith("LE"):
-        return f"{v:,.0f}"
-    if kind == "consumption":
-        return f"{v:,.1f}"
-    return f"{v:,.2f}"
+    return fmt(v, kind, unit)
 
 
 def render_table(t: dict) -> str:
@@ -180,7 +183,7 @@ def answer(tool: str, result: dict) -> str:
     if "tables" in result:
         parts = [render_table(t) for t in result["tables"]]
         if result.get("flow_diagram"):
-            parts.append("```mermaid\n" + result["flow_diagram"]["mermaid"] + "\n```")
+            parts.append("The production flow diagram is drawn below.")
         for w in result.get("warnings", []):
             parts.append(f"⚠ {w['detail']}")
         return "\n\n".join(parts)
@@ -188,7 +191,7 @@ def answer(tool: str, result: dict) -> str:
         lines = [f"Updated in your working session: `{c['path']}` {c['old']} → {c['new']}." for c in result["changes"]]
         for i in result.get("impact", [])[:5]:
             if i["delta"] is not None:
-                lines.append(f"- {i['figure']}: {i['a']:,.2f} → {i['b']:,.2f} ({i['delta']:+,.2f})")
+                lines.append(f"- {i['figure']}: {fmt(i['a'])} → {fmt(i['b'])} ({i['delta']:+,.2f})")
         if result.get("sourcing_change"):
             lines.append(f"⚠ {result['sourcing_change']['message']}")
         for w in result.get("warnings", []):
@@ -199,9 +202,12 @@ def answer(tool: str, result: dict) -> str:
         lines = [f"Reverted `{r['path']}` to {r['restored']}." for r in result["reverted"]]
         for i in result.get("impact", [])[:3]:
             if i["delta"] is not None:
-                lines.append(f"- {i['figure']}: {i['a']:,.2f} → {i['b']:,.2f} ({i['delta']:+,.2f})")
+                lines.append(f"- {i['figure']}: {fmt(i['a'])} → {fmt(i['b'])} ({i['delta']:+,.2f})")
         lines.append(f"{result['remaining_changes']} earlier change(s) can still be undone.")
         return "\n".join(lines)
+    if tool == "commit_state" and "scenario_id" not in result:
+        return (f"Done. The working session now starts again from {result.get('base_baseline_id') or 'the baseline'}; "
+                "this conversation is closed.")
     if tool == "commit_state":
         return f"Saved as '{result.get('name')}' (id: {result.get('scenario_id')}). Your working session is unchanged."
     if tool == "list_states":
@@ -214,14 +220,14 @@ def answer(tool: str, result: dict) -> str:
             lines.append(f"- `{d['path']}`: {d['a']} → {d['b']}")
         if "group_ebt" in result:
             g = result["group_ebt"]
-            lines.append(f"Group EBT: {g['a']:,.2f} → {g['b']:,.2f} M$ ({g['delta']:+,.2f}).")
+            lines.append(f"Group EBT: {fmt(g['a'])} → {fmt(g['b'])} M$ ({g['delta']:+,.2f}).")
         if result.get("sourcing_change"):
             lines.append(f"⚠ {result['sourcing_change']['message']}")
         return "\n".join(lines)
     if tool == "run_sensitivity":
         lines = [f"| {result['input_path']} | {result['output_metric']} ({result['unit']}) | status |", "|---:|---:|---|"]
         for p in result["points"]:
-            out = "" if p["output"] is None else f"{p['output']:,.2f}"
+            out = "" if p["output"] is None else fmt(p["output"])
             lines.append(f"| {p['input']:,.2f} | {out} | {p['status']} |")
         if result["zero_crossings"]:
             lines.append("\nCrosses zero at " + ", ".join(f"{x:,.2f}" for x in result["zero_crossings"]) + ".")

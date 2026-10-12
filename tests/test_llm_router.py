@@ -11,6 +11,7 @@ import pytest
 import cost_engine as ce
 import llm_router
 import state_manager as sm
+import ui_render
 from llm_sim import SimulatedClaude
 from tools import ToolBox
 
@@ -195,12 +196,13 @@ def test_e2e_answers_carry_the_engines_numbers(sim, store):
     o = ce.compute_all(store.get_state())
     ebt = o["consolidated"]["usd_monthly"]["consolidated"]["ebt"]
     a = sim.ask("What is the consolidated EBT this month?")
-    assert f"{ebt:,.2f}" in a.text and "Source: working state" in a.text
+    assert ebt < 0 and f"({-ebt:,.2f})" in a.text                # accounting negatives
+    assert "Source: working state" in a.text
     efs = o["billet"]["EFS"]["total_variable_cost"]
     assert f"{efs:,.2f}" in sim.ask("Show the billet cost for all companies").text
     a = sim.ask("Show me the EZDK P&L in EGP")
     sub = o["pnl"]["le_monthly"]["columns"]["EZDK/Sub-Total"]["ebt"]
-    assert f"{sub:,.2f}" in a.text and "M LE" in a.text
+    assert ui_render.fmt(sub) in a.text and "M LE" in a.text
 
 
 def test_e2e_amend_save_compare(sim, store):
@@ -228,4 +230,4 @@ def test_e2e_sensitivity_and_flow(sim):
     a = sim.ask("run a sensitivity of sales.ESR.Rebar.local_price_le_t on ebt for ESR")
     assert a.tool_calls[0]["name"] == "run_sensitivity" and a.tool_calls[0]["status"] == "ok"
     b = sim.ask("show the production flow")
-    assert "```mermaid" in b.text
+    assert "flow diagram is drawn below" in b.text           # the UI draws it from the tool result
