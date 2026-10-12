@@ -1,4 +1,4 @@
-"""Step 3 — the 14 tools.  Done-criterion (Appendix C): each tool callable directly from
+"""Step 3 — the tools (14 specified + undo).  Done-criterion (Appendix C): each tool callable directly from
 Python with structured arguments and structured returns.  Every number a tool shows must
 be the engine's number."""
 
@@ -54,7 +54,7 @@ def row(table, label):
 # ---- catalogue and dispatcher ----------------------------------------------------- #
 
 def test_fourteen_tools_with_valid_schemas():
-    assert len(tools.TOOL_SPECS) == 14
+    assert len(tools.TOOL_SPECS) == 15
     for name, spec in tools.TOOL_SPECS.items():
         sch = spec["input_schema"]
         assert sch["type"] == "object" and set(sch["required"]) <= set(sch["properties"]), name
@@ -63,7 +63,7 @@ def test_fourteen_tools_with_valid_schemas():
 
 
 def test_visible_tools_follow_the_ship_gate_and_permissions(box, fantomaas):
-    assert len(box.visible_tools()) == 13                       # optimizer hidden until step 8
+    assert len(box.visible_tools()) == 14                       # optimizer hidden until step 8
     assert "find_optimal_mix" not in {t["name"] for t in box.visible_tools()}
     assert "manage_baseline_refresh" not in {t["name"] for t in fantomaas.visible_tools()}
     assert code(box.call("find_optimal_mix", {"objective": "group_cm"})) == "tool_unavailable"
@@ -346,3 +346,17 @@ def test_every_tool_returns_json_serialisable_results(box):
              ("compare_states", {"state_a_id": "baseline_2026-04", "state_b_id": "working"})]
     for name, args in calls:
         json.dumps(ok(box.call(name, args)))
+
+
+def test_undo_tool(box, fantomaas, store):
+    assert code(box.call("undo_last_change", {})) == "nothing_to_undo"
+    ok(box.call("update_input", {"path": "sales.EZDK.Rebar.local_kt", "value": 110}))
+    ok(fantomaas.call("update_input", {"path": "dri.EZDK.iop_landed_usd_t", "value": 140}))
+    r = ok(fantomaas.call("undo_last_change", {}))           # the orchestrator may undo too
+    assert r["reverted"] == [{"path": "dri.EZDK.iop_landed_usd_t", "restored": 130.0}]
+    assert r["sourcing_change"]["to"] == "EZDK"               # the supplier switch is reversed too
+    assert r["remaining_changes"] == 1
+    assert any(i["figure"] == "Group EBT M$" for i in r["impact"])
+    r = ok(box.call("undo_last_change", {}))
+    assert store.get_state() == store.get_state("baseline_2026-04")
+    assert code(box.call("undo_last_change", {"steps": 2})) == "schema_validation_error"

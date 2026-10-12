@@ -26,10 +26,11 @@ electricity price.
 | `model_fixes.py` | Workbook → corrected state, and the fix-by-fix bridge. |
 | `state_manager.py` | **Step 2.** Baselines, scenarios and the live working session in SQLite. |
 | `state_schema.py` | What a valid state is; dotted paths; the structured errors every tool returns. |
-| `tools.py` | **Step 3.** The assistant's 14 tools, with their argument schemas (`TOOL_SPECS`). |
+| `tools.py` | **Step 3.** The assistant's tools (the 14 specified + undo), with their argument schemas (`TOOL_SPECS`). |
 | `refresh_template.py` | The seven-sheet monthly refresh template (Appendix D), and the XLSX / CSV parsers. |
 | `llm_router.py` | **Step 4.** Claude picks and calls the tools, then answers. Includes a terminal session. |
 | `llm_sim.py` | A simulated Claude (same API surface) for running and testing without an API key. |
+| `session_manager.py` | **Step 5.** The conversation as a durable session: saved turns, currency preference, resume. |
 | `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
 | `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
 | `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
@@ -102,7 +103,7 @@ store.runtime_header()   # "Current state: baseline 2026-04 loaded, 1 scenarios 
   (`invalid_path`, `structural_non_existence`, `schema_validation_error`,
   `integrity_check_failed`, …). Capacity overruns are warnings.
 
-## Step 3 — the 14 tools (`tools.py`)
+## Step 3 — the tools (`tools.py`)
 
 ```python
 from tools import ToolBox
@@ -119,6 +120,7 @@ box.call("manage_baseline_refresh", {"action": "commit", "source": "xlsx", "file
 | # | Tool | What it returns |
 |---|---|---|
 | 1 | `update_input` | old → new, impact on key figures, affected reports, an ERM supplier switch if one happens |
+| 1b | `undo_last_change` | reverts the last amendment (repeatable), with its impact. Added at your request beyond the specified 14 |
 | 2 | `read_state` | any slice of any stored state |
 | 3 | `list_states` | baselines / scenarios, filterable |
 | 4 | `get_cost_sheet` | DRI, billet, or finished-product cost sheet: detailed, conversion summary, inputs side by side |
@@ -176,6 +178,35 @@ reply.usage         # tokens, including cache reads
 - **Testing.** Loop mechanics are tested with a scripted client, and answers end to end with the
   simulated Claude. `tests/test_llm_live.py` runs real Claude once credentials are configured.
 
+## Step 5 — sessions (`session_manager.py`)
+
+```python
+from session_manager import SessionManager
+session = SessionManager(store)          # or SessionManager(store, SimulatedClaude(), use_fallbacks=False)
+opening = session.connect()
+opening["message"]      # "You have an in-progress session from …, based on baseline 2026-04. You had
+                        #  updated …. Would you like to resume, save it as a scenario now, or discard it?"
+opening["transcript"]   # the conversation so far, for the UI to redraw
+reply = session.ask("Show the consolidated P&L")
+```
+
+- **Close the browser (or the process) at any point.** The working inputs (saved on every change),
+  the conversation (saved after every turn) and the currency preference are all in the SQLite
+  file. `connect()` picks up where you stopped, in the same Claude conversation with its full context.
+- **Resume (Pattern F).** With unsaved changes, the assistant opens with the spec's question
+  (resume / save as scenario / discard). Claude gets a one-off note on the next turn saying the
+  user reconnected, when, and what they were asked. The history stays append-only.
+- **Currency preference (Rule 5).** Asking for EGP (or USD) in any report makes it the session's
+  currency. Later reports that name no currency use it, and say so. It resets to USD when a new
+  session starts.
+- **A session ends** when the working state is promoted to a baseline or discarded. The next
+  message starts a fresh conversation. Saving a scenario does not end it. Closed conversations are
+  kept (`session.history()`).
+- **Channels.** The direct user and the orchestrator each have their own conversation over the
+  single shared working state (§5: one session per user, shared across tabs).
+- `python llm_router.py [--simulate]` runs a terminal session on top of this, so closing and
+  reopening the terminal resumes the same way.
+
 ## Tests
 
 ```
@@ -190,5 +221,5 @@ sourcing decision in state, integrity checks, `compute_all`. The corrected model
 does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
 P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
 (§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
-Next step per the brief: Step 5, `session_manager.py` (session persistence of the conversation itself,
-currency preference, and the resume flow).
+Next step per the brief: Step 6, the Gradio web interface (chat, rendered tables and charts, the
+resume prompt on open).

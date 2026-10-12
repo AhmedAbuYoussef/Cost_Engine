@@ -1,5 +1,6 @@
 """
-Step 3 — the assistant's 14 tools (system prompt §3), callable directly from Python.
+Step 3 — the assistant's tools (system prompt §3 — the 14 specified there, plus
+``undo_last_change`` added at the user's request), callable directly from Python.
 
     from tools import ToolBox
     box = ToolBox(store)                  # store = state_manager.StateStore(...)
@@ -29,6 +30,7 @@ import os
 
 import cost_engine as ce
 import refresh_template
+from state_manager import diff_figures as sm_diff_figures
 import state_schema as schema
 from state_schema import COMPANIES, PRODUCTION_MATRIX, PRODUCTS, ModelError
 
@@ -64,6 +66,9 @@ TOOL_SPECS = {s["name"]: s for s in [
            "changes": {"type": "array", "items": {"type": "object"},
                        "description": "alternative to path/value: [{path, value, scope?}, ...] applied together"},
            "note": {"type": "string"}}),
+    _spec("undo_last_change", "Revert the most recent change to the working session (one update_input "
+          "call, which may have set several inputs). Call again to go further back. Changes cannot be undone "
+          "past a promotion to baseline, a discard, or loading another state into the session.", {}),
     _spec("read_state", "Read a slice of any stored state ('*' for all of it).",
           {"path": {"type": "string", "default": "*"}, "state_id": _STATE_ID}),
     _spec("list_states", "List baselines and/or scenarios with their metadata.",
@@ -264,7 +269,7 @@ def _line_label(key: str, stages: dict) -> str:
 # --------------------------------------------------------------------------- #
 
 class ToolBox:
-    """The 14 tools bound to one StateStore and one caller mode."""
+    """The tools bound to one StateStore and one caller mode."""
 
     def __init__(self, store, *, mode: str = "user", template_dir: str = "refresh_templates"):
         if mode not in ("user", "orchestrator"):
@@ -340,6 +345,19 @@ class ToolBox:
                 res["sourcing_change"] = note_
             res["message"] = ("Updated in your working session — changes become permanent only if you "
                               "promote them at end of session or refresh the baseline.")
+        return res
+
+    def undo_last_change(self):
+        before = self.store.get_state("working")
+        res = self.store.undo(actor=self.mode)
+        ob, oa = ce.compute_all(before), self.store.compute("working")
+        res["impact"] = sm_diff_figures(ce.key_figures(ob), ce.key_figures(oa))[:25]
+        res["affected_reports"] = _affected_reports(ob, oa)
+        note_ = _sourcing_change(ob, oa)
+        if note_:
+            res["sourcing_change"] = note_
+        res["remaining_changes"] = self.store.session_summary()["change_batches"]
+        res["message"] = "Reverted in your working session."
         return res
 
     def read_state(self, path="*", state_id="working"):

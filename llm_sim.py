@@ -35,6 +35,10 @@ def _response(content, stop_reason):
                                                  cache_read_input_tokens=0, cache_creation_input_tokens=0))
 
 
+def _g(block, key):
+    return block.get(key) if isinstance(block, dict) else getattr(block, key, None)
+
+
 def _text(content) -> str:
     if isinstance(content, str):
         return content
@@ -64,7 +68,12 @@ def _product(q):
 
 
 def _currency(q):
-    return "EGP" if re.search(r"\b(egp|le|pounds?)\b", q) else "USD"
+    """Only a currency the user named (otherwise the session's preference applies)."""
+    if re.search(r"\b(egp|le|pounds?)\b", q):
+        return {"currency": "EGP"}
+    if re.search(r"\b(usd|dollars?)\b", q):
+        return {"currency": "USD"}
+    return {}
 
 
 def plan(question: str):
@@ -83,6 +92,8 @@ def plan(question: str):
                                    "variation": {"type": "delta_pct", "values": [-10, -5, 0, 5, 10]},
                                    "output_metric": m.group(2), "company": co or "EZDK",
                                    **({"product": prod} if prod else {})}
+    if re.search(r"\b(undo|revert|go back)\b", q):
+        return "undo_last_change", {}
     if "scenario" in q and ("list" in q or "saved" in q or "which" in q):
         return "list_states", {"type": "scenarios"}
     if "compare" in q or "what changed" in q:
@@ -96,25 +107,25 @@ def plan(question: str):
             args["hrc_total_local_market_kt"] = float(m.group(1))
         return "get_sales_report", args
     if "fixed cost" in q:
-        return "get_fixed_cost_report", {"company": co or "all", "currency": cur}
+        return "get_fixed_cost_report", {"company": co or "all", **cur}
     if any(w in q for w in ("production", "capacity", "how much dri", "how much iop", "flow")):
         return "get_production_report", {"company": co or "all",
                                          "view": "flow_diagram" if "flow" in q else "summary"}
     if any(w in q for w in ("p&l", "pnl", "ebt", "profit", "contribution margin", "break-even", "breakeven")):
         if co and "consolidated" not in q and "group" not in q:
-            return "get_pnl", {"scope": "standalone", "company": co, "currency": cur}
-        return "get_pnl", {"scope": "consolidated", "currency": cur}
+            return "get_pnl", {"scope": "standalone", "company": co, **cur}
+        return "get_pnl", {"scope": "consolidated", **cur}
     if "cost" in q:
         stage = "dri" if "dri" in q else "billet" if "billet" in q else "finished_product" if prod else None
         if stage:
-            args = {"stage": stage, "company": co or "all", "currency": cur,
+            args = {"stage": stage, "company": co or "all", **cur,
                     "view": "detailed" if "detail" in q else "conversion_summary"}
             if stage == "finished_product":
                 args["product"] = prod
             return "get_cost_sheet", args
     if "sales" in q or "price" in q:
         return "get_sales_report", {"company": co or "all", "product": prod or "all",
-                                    "view": "prices_only" if "price" in q else "full", "currency": cur}
+                                    "view": "prices_only" if "price" in q else "full", **cur}
     return None
 
 
@@ -184,6 +195,13 @@ def answer(tool: str, result: dict) -> str:
             lines.append(f"⚠ {w['detail']}")
         lines.append("Changes become permanent only if you promote them at end of session or refresh the baseline.")
         return "\n".join(lines) if result["changes"] else result.get("message", "Nothing changed.")
+    if tool == "undo_last_change":
+        lines = [f"Reverted `{r['path']}` to {r['restored']}." for r in result["reverted"]]
+        for i in result.get("impact", [])[:3]:
+            if i["delta"] is not None:
+                lines.append(f"- {i['figure']}: {i['a']:,.2f} → {i['b']:,.2f} ({i['delta']:+,.2f})")
+        lines.append(f"{result['remaining_changes']} earlier change(s) can still be undone.")
+        return "\n".join(lines)
     if tool == "commit_state":
         return f"Saved as '{result.get('name')}' (id: {result.get('scenario_id')}). Your working session is unchanged."
     if tool == "list_states":
@@ -234,12 +252,10 @@ class SimulatedClaude:
             if isinstance(content, list) else []
         if results:
             prev = request["messages"][-2]["content"]
-            names = {getattr(b, "id", None): getattr(b, "name", None) for b in prev
-                     if getattr(b, "type", None) == "tool_use"}
+            names = {_g(b, "id"): _g(b, "name") for b in prev if _g(b, "type") == "tool_use"}
             text = "\n\n".join(answer(names.get(r["tool_use_id"]), json.loads(r["content"])) for r in results)
             return _response([_block(type="text", text=text)], "end_turn")
-        p = plan(_text([b for b in content if not str(getattr(b, "text", "") or
-                                                       (b.get("text", "") if isinstance(b, dict) else "")).startswith("[Runtime header]")]))
+        p = plan(_text([b for b in content if not str(_g(b, "text") or "").startswith("[")]))
         if p is None:
             return _response([_block(type="text", text=CAPABILITIES)], "end_turn")
         name, args = p

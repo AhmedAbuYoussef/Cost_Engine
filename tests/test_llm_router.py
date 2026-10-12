@@ -67,7 +67,7 @@ def test_request_shape(store):
     assert req["betas"] == ["server-side-fallback-2026-07-01"] and req["fallbacks"] == "default"
     assert "tool_choice" not in req and "thinking" not in req     # auto; adaptive thinking by default
     names = [t["name"] for t in req["tools"]]
-    assert len(names) == 13 and "find_optimal_mix" not in names
+    assert len(names) == 14 and "find_optimal_mix" not in names and "undo_last_change" in names
     assert all(set(t) == {"name", "description", "input_schema"} for t in req["tools"])
 
 

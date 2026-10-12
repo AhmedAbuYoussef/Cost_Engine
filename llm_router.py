@@ -83,8 +83,9 @@ def build_system_prompt(mode: str, state: dict) -> str:
 - **Tools.** The tool definitions attached to this conversation are authoritative for names and
   arguments. `find_optimal_mix` is not available yet: it ships at a later build step, after its four
   verification cases pass. If asked to optimise, say so and offer sensitivity runs or scenario
-  comparisons instead. There is no undo tool. To revert an input, set it back to the old value that the
-  earlier `update_input` result returned.
+  comparisons instead. To revert the latest amendment, call `undo_last_change`. Call it again to go
+  further back, after confirming with the user as for any state change. Undo cannot go back past a
+  promotion, a discard, or loading another state.
 - **Tool results are JSON.** Reports return tables (`title`, `columns`, `rows` with `label`, `unit`,
   `kind` and `values`, plus `footnotes` and `source`). Present them as markdown tables. Keep every
   footnote that matters and always end with the source line. Round only for display:
@@ -102,7 +103,9 @@ def build_system_prompt(mode: str, state: dict) -> str:
   Inputs that must change together (a blend and its balancing scrap share) go in one call as `changes`.
 - **Integrity.** Error-level checks block writes and reports, and the tools return them as
   `integrity_check_failed`. Capacity overruns are warnings: report them and do not stop.
-- **Currency arguments** are `"USD"` or `"EGP"`. Money in the state is USD unless the key says `le`, or
+- **Currency arguments** are `"USD"` or `"EGP"`. Pass `currency` only when the user names a currency.
+  The session remembers the last one asked for and applies it to later reports (Rule 5); results then
+  carry `currency_from_preference`, which you mention briefly. Money in the state is USD unless the key says `le`, or
   the value is written `{{"le": x}}`.
 - **State paths** (dotted; use `read_state` on a section to see its exact keys):
 {_path_catalogue(state)}
@@ -149,7 +152,8 @@ class Reply:
 
 class Router:
     def __init__(self, toolbox, client=None, *, model: str = MODEL, effort: str = EFFORT,
-                 max_tool_rounds: int = MAX_TOOL_ROUNDS, use_fallbacks: bool = True):
+                 max_tool_rounds: int = MAX_TOOL_ROUNDS, use_fallbacks: bool = True,
+                 messages: list | None = None):
         if client is None:
             import anthropic
             client = anthropic.Anthropic()      # credentials from the environment / `ant auth login`
@@ -158,7 +162,7 @@ class Router:
         self.use_fallbacks = use_fallbacks
         self.system = build_system_prompt(toolbox.mode, toolbox.store.get_state("working"))
         self.tools = tool_definitions(toolbox)
-        self.messages: list = []
+        self.messages: list = list(messages or [])     # a restored conversation continues as is
         self.tool_log: list = []
 
     def _request(self) -> dict:
@@ -187,9 +191,10 @@ class Router:
                 "content": json.dumps(_round_floats(result), ensure_ascii=False, separators=(",", ":")),
                 **({"is_error": True} if result.get("status") == "error" else {})}, entry
 
-    def ask(self, text: str) -> Reply:
-        """One user turn: Claude may call tools several times before answering."""
-        content = [{"type": "text", "text": text}]
+    def ask(self, text: str, notes=()) -> Reply:
+        """One user turn: Claude may call tools several times before answering.  ``notes`` are
+        one-off context lines (e.g. a reconnect notice) sent ahead of the user's text."""
+        content = [{"type": "text", "text": n} for n in notes] + [{"type": "text", "text": text}]
         if not self.messages:                       # runtime header, first turn only
             content.insert(0, {"type": "text", "text": f"[Runtime header] {self.toolbox.store.runtime_header()}"})
         self.messages.append({"role": "user", "content": content})
@@ -240,8 +245,8 @@ def _add_usage(total: dict, usage) -> None:
 # --------------------------------------------------------------------------- #
 
 def main(argv=None):
+    from session_manager import SessionManager
     from state_manager import StateStore
-    from tools import ToolBox
     p = argparse.ArgumentParser(description="Ezz Steel Pricing Model Assistant — terminal session")
     p.add_argument("--db", default="ezz_model.db")
     p.add_argument("--mode", choices=["user", "orchestrator"], default="user")
@@ -254,9 +259,12 @@ def main(argv=None):
     if a.simulate:
         from llm_sim import SimulatedClaude
         client = SimulatedClaude()
-    router = Router(ToolBox(store, mode=a.mode), client, model=a.model, effort=a.effort,
-                    use_fallbacks=not a.simulate)
-    print(store.runtime_header())
+    session = SessionManager(store, client, channel=a.mode, model=a.model, effort=a.effort,
+                             use_fallbacks=not a.simulate)
+    opening = session.connect()        # a closed terminal resumes like a closed browser
+    print(opening["runtime_header"])
+    if opening["message"]:
+        print("\n" + opening["message"])
     print("Ask a question (empty line to quit).")
     while True:
         try:
@@ -265,10 +273,12 @@ def main(argv=None):
             break
         if not q:
             break
-        r = router.ask(q)
+        r = session.ask(q)
         print("\n" + r.text)
         if r.tool_calls:
             print("\n[tools: " + ", ".join(f"{c['name']}→{c['status']}" for c in r.tool_calls) + "]")
+        if getattr(r, "session_ended", False):
+            print("\n[session closed — the next message starts a new one]")
 
 
 if __name__ == "__main__":

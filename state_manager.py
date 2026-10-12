@@ -189,6 +189,15 @@ class StateStore:
     def close(self) -> None:
         self._db.close()
 
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """The SQLite connection, shared by the session layer (one file, one writer)."""
+        return self._db
+
+    @property
+    def lock(self):
+        return self._lock
+
     # ------------------------------------------------------------------ rows
 
     def _now(self) -> str:
