@@ -132,13 +132,22 @@ TOOL_SPECS = {s["name"]: s for s in [
            "output_focus": {"type": "string", "enum": ["pnl", "cost_sheet", "sales", "production", "fixed_cost"]},
            "threshold_pct": {"type": "number", "default": 0}},
           required=["state_a_id", "state_b_id"]),
-    _spec("find_optimal_mix", "Search the operational plan that maximises contribution margin "
-          "(available from build step 8, after its four verification cases pass).",
+    _spec("find_optimal_mix", "Find the operational plan (sales mix, ERM billet sourcing, furnace blends) "
+          "that maximises contribution margin within capacity, policy floors and local markets. Prices, "
+          "yields, MRMR, consumptions and fixed costs are never changed. Needs this month's local HRC "
+          "market. Returns the plan, CM at the optimum vs now, binding constraints with shadow prices and "
+          "three self-checks; does NOT change the working state (apply with update_input 'changes').",
           {"objective": {"type": "string", "enum": ["group_cm", "company_cm"]},
            "company": {"type": "string", "enum": list(COMPANIES)},
-           "free_variables": {"type": "array", "items": {"type": "string"}},
-           "run_constraints": {"type": "object"}, "state_id": _STATE_ID},
-          required=["objective"], available=False),
+           "free_variables": {"type": "array", "items": {"type": "string"},
+                              "description": "default: local_sales, export_sales, billet_sourcing, blending; "
+                                             "or individual sales / blend paths"},
+           "run_constraints": {"type": "object", "description":
+                               "capacity_ceilings {dri: {CO: t}, finished: {CO: {product: t}}}, policy_floors "
+                               "{local_share_min: {product: 0..1}}, local_market_ceilings {Rebar, Wire Rod, HRC: "
+                               "kt — HRC required}, additional_constraints [{variable, min, max}]"},
+           "state_id": _STATE_ID},
+          required=["objective"]),
     _spec("manage_baseline_refresh", "Monthly baseline refresh: generate the seven-sheet XLSX template, "
           "or commit a filled template / CSV / full state as a month's baseline. Direct user only.",
           {"action": {"type": "string", "enum": ["generate_template", "commit"]},
@@ -268,6 +277,16 @@ def _line_label(key: str, stages: dict) -> str:
 # ToolBox
 # --------------------------------------------------------------------------- #
 
+def optimizer_gate() -> dict:
+    """Appendix D.3 ship-gate: find_optimal_mix is offered only if its four verification cases
+    pass (run once per process).  Without a solver installed it stays withheld."""
+    try:
+        import optimizer
+    except ImportError as exc:
+        return {"passed": False, "cases": [], "reason": f"the LP solver is not installed ({exc})"}
+    return optimizer.ship_gate()
+
+
 class ToolBox:
     """The tools bound to one StateStore and one caller mode."""
 
@@ -295,7 +314,8 @@ class ToolBox:
         """Tools the assistant may see now (D.3: the optimizer stays hidden until it ships;
         refresh is not offered to the orchestrator)."""
         return [s for s in TOOL_SPECS.values()
-                if s["available"] and not (s["user_only"] and self.mode != "user")]
+                if s["available"] and not (s["user_only"] and self.mode != "user")
+                and (s["name"] != "find_optimal_mix" or optimizer_gate()["passed"])]
 
     # ---------------------------------------------------------------- shared
 
@@ -941,10 +961,20 @@ class ToolBox:
                 res["sourcing_change"] = note_
         return res
 
-    def find_optimal_mix(self, **_):
-        raise ModelError("tool_unavailable",
-                         "the optimizer is not available yet: it ships at build step 8, and only after its four "
-                         "verification cases pass (system prompt, Appendix D.2–D.3)")
+    def find_optimal_mix(self, objective, company=None, free_variables=None, run_constraints=None,
+                         state_id="working"):
+        gate = optimizer_gate()
+        if not gate["passed"]:
+            failed = [c for c in gate["cases"] if not c["passed"]]
+            raise ModelError("tool_unavailable",
+                             "the optimizer is withheld: its verification cases must all pass before it is offered "
+                             "(Appendix D.3). " + ("; ".join(f"{c['case']}: {c['detail']}" for c in failed)
+                                                   or gate.get("reason", "")),
+                             verification=gate)
+        import optimizer
+        state, _, src = self._load(state_id)
+        return optimizer.optimize(state, objective=objective, company=company, free_variables=free_variables,
+                                  run_constraints=run_constraints, source=src)
 
     # ================================================================ Lifecycle
 
@@ -1112,11 +1142,14 @@ def _flow_diagram(out, cos):
     if "ERM" in cos:
         s = out["sourcing"]
         add("FIN_ERM_rebar", "ERM Rebar", pr["long"]["ERM"]["rebar"])
-        src = f"CAST_long_{s['supplier']}" if s["supplier"] != "market" else "MARKET"
-        if s["supplier"] == "market" or src not in {n["id"] for n in nodes}:
-            add(src, "Market billets" if s["supplier"] == "market" else f"{s['supplier']} billets",
-                pr["long"]["ERM"]["billet"])
-        edge(src, "FIN_ERM_rebar", pr["long"]["ERM"]["billet"])
+        parts = [(f"CAST_long_{s['supplier']}", f"{s['supplier']} billets", s["internal_t"] / 1000),
+                 ("MARKET", "Market billets", s["market_t"] / 1000)]
+        for src, label, kt in parts:
+            if kt <= 0:
+                continue
+            if src not in {n["id"] for n in nodes}:
+                add(src, label, kt)
+            edge(src, "FIN_ERM_rebar", kt)
     seen, uniq = set(), []
     for n in nodes:
         if n["id"] not in seen:
@@ -1166,13 +1199,21 @@ def _sourcing_change(before: dict, after: dict):
     """ERM's billet supplier differs between two states — worth saying out loud, because the
     billet volume (and the DRI, scrap and IOP behind it) moves from one company to another."""
     a, b = before["sourcing"], after["sourcing"]
-    if a["supplier"] == b["supplier"]:
+    if a["supplier"] == b["supplier"] and abs(a["internal_share"] - b["internal_share"]) < 1e-12:
         return None
-    return {"from": a["supplier"], "to": b["supplier"], "price_before": a["price_usd_t"],
+
+    def name(x):
+        if 0 < x["internal_share"] < 1:
+            return f"{x['supplier']} ({x['internal_share']:.0%}) + market"
+        return x["supplier"]
+    moved = (abs(b["internal_t"] - a["internal_t"]) if a["supplier"] == b["supplier"]
+             else max(a["internal_t"], b["internal_t"]))
+    return {"from": a["supplier"], "to": b["supplier"], "share_before": a["internal_share"],
+            "share_after": b["internal_share"], "price_before": a["price_usd_t"],
             "price_after": b["price_usd_t"], "billets_kt": b["billets_t"] / 1000,
-            "message": f"ERM's cheapest billet source changed from {a['supplier']} to {b['supplier']} "
+            "message": f"ERM's billet source changed from {name(a)} to {name(b)} "
                        f"({a['price_usd_t']:,.2f} → {b['price_usd_t']:,.2f} $/t); "
-                       f"{b['billets_t'] / 1000:,.1f} kt of billet production moves with it."}
+                       f"{moved / 1000:,.1f} kt of billet production moves with it."}
 
 
 def _affected_reports(before: dict, after: dict) -> list:

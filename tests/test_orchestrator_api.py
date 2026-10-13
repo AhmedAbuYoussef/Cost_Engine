@@ -105,7 +105,7 @@ def test_every_read_and_analysis_tool_answers(api):
 def test_describe_lists_what_is_refused(api):
     d = api.describe()
     names = {t["name"] for t in d["tools"]}
-    assert "manage_baseline_refresh" not in names and "find_optimal_mix" not in names
+    assert "manage_baseline_refresh" not in names and "find_optimal_mix" in names
     assert {"tool": "commit_state", "action": "promote_to_baseline"} in d["refused"]
     assert all({"name", "description", "input_schema"} <= set(t) for t in d["tools"])
 

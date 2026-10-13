@@ -466,6 +466,72 @@ def _texts(content) -> list[str]:
     return [_g(b, "text") for b in content if _g(b, "type") == "text"]
 
 
+def optimizer_html(result: dict) -> str:
+    """find_optimal_mix → the plan, CM now vs optimum, per company, binding constraints with
+    shadow prices and the self-checks — CM deltas colour-coded (▲ green better, ▼ red worse)."""
+    e = html.escape
+    cm = result["cm"]
+    head = ("group" if result["objective"] == "group_cm" else f"{result['company']}'s") + " contribution margin"
+    out = [_TABLE_CSS, '<div class="cmp">', f"<h4>Optimal plan — {e(head)} (M$ per month)</h4>",
+           "<table><tr><th>CM</th><th>Now</th><th>Optimum</th><th>Change</th><th>%</th></tr><tr><td><b>"
+           f"{e(head.capitalize())}</b></td><td>{fmt(cm['current'])}</td><td>{fmt(cm['optimal'])}</td>"
+           + _delta_cell(cm["delta"], "CM", "money", "M$",
+                         None if not cm["current"] else 100 * cm["delta"] / abs(cm["current"])) + "</tr></table>"]
+    sales = [r for r in result["plan"]["sales"] if abs(r["delta_kt"]) > 1e-9]
+    if sales:
+        out.append("<h4>Sales (kt per month)</h4><table><tr><th>Line</th><th>Now</th><th>Optimum</th>"
+                   "<th>Change</th><th>%</th></tr>")
+        for r in sales:
+            _, co, prod, k = r["path"].split(".")
+            label = f"{co} {prod} {'local' if k.startswith('local') else 'export'}"
+            out.append(f"<tr><td>{e(label)}</td><td>{fmt(r['current_kt'], 'qty')}</td>"
+                       f"<td>{fmt(r['optimal_kt'], 'qty')}</td>"
+                       + _delta_cell(r["delta_kt"], label, "qty", "kt") + "</tr>")
+        out.append("</table>")
+    src = result["plan"]["billet_sourcing"]
+    def _src(sup, share):
+        return "market" if sup == "market" or share == 0 else (
+            f"{sup} {share:.0%}" + (" + market" if share < 1 else ""))
+    out.append(f"<h4>ERM billet sourcing</h4><p>{e(_src(src['current_supplier'], src['current_share']))} → "
+               f"<b>{e(_src(src['supplier'], src['internal_share']))}</b> "
+               f"({fmt(src['internal_kt'], 'qty')} kt internal, {fmt(src['market_kt'], 'qty')} kt market)</p>")
+    blends = [r for r in result["plan"]["blending"] if abs(r["delta_pct"]) > 1e-9]
+    if blends:
+        out.append("<h4>Furnace blends (% of charge)</h4><table><tr><th>Furnace · material</th><th>Now</th>"
+                   "<th>Optimum</th><th>Change</th><th></th></tr>")
+        for r in blends:
+            label = f"{r['furnace']} · {r['material'].replace('_', ' ')}"
+            out.append(f"<tr><td>{e(label)}</td><td>{r['current_pct']:.1f}%</td><td>{r['optimal_pct']:.1f}%</td>"
+                       + _delta_cell(r["delta_pct"], label, "consumption", "") + "</tr>")
+        out.append("</table>")
+    out.append("<h4>CM by company (M$)</h4><table><tr><th>Company</th><th>Now</th><th>Optimum</th>"
+               "<th>Change</th><th>%</th></tr>")
+    for r in result["by_company"]["rows"]:
+        pct = None if not r["current"] else 100 * r["delta"] / abs(r["current"])
+        out.append(f"<tr><td>{e(r['company'])}</td><td>{fmt(r['current'])}</td><td>{fmt(r['optimal'])}</td>"
+                   + _delta_cell(r["delta"], f"{r['company']} CM", "money", "M$", pct) + "</tr>")
+    out.append("</table>")
+    if result["binding_constraints"]:
+        out.append("<h4>Binding constraints — what one more unit is worth</h4><table><tr><th>Constraint</th>"
+                   "<th>Shadow price</th></tr>")
+        for b in result["binding_constraints"]:
+            out.append(f"<tr><td>{e(b['description'])}</td><td>{e(b['text'].split(' (')[0])}</td></tr>")
+        out.append("</table>")
+    sc = result.get("self_checks") or {}
+    if sc:
+        c, p = sc["engine_cross_check"], sc["perturbation"]
+        out.append('<p class="note">Self-checks: ✓ engine cross-check (Δ '
+                   f'{abs(c["difference_usd"]):.2g} $) · ✓ integrity and every run constraint · ✓ perturbation '
+                   f'({p["feasible"]} feasible ±5% moves of {p["tested"]}, none better)</p>')
+    for n in result.get("notes", []):
+        out.append(f'<p class="note">Note: {e(n)}</p>')
+    viol = result.get("current_plan_violations") or []
+    if viol:
+        out.append(f'<p class="note">The current plan breaks: {e("; ".join(viol))}.</p>')
+    out.append(f'<p class="note">{e(result.get("source", ""))} · not applied to the working state.</p></div>')
+    return "".join(out)
+
+
 def artifacts(tool: str, result: dict) -> list[dict]:
     """HTML pieces the UI shows under an answer, for one tool result."""
     if result.get("status") != "ok":
@@ -473,6 +539,8 @@ def artifacts(tool: str, result: dict) -> list[dict]:
     out = []
     if tool == "compare_states":
         out.append({"kind": "compare", "html": compare_html(result)})
+    if tool == "find_optimal_mix":
+        out.append({"kind": "optimizer", "html": optimizer_html(result)})
     tables = [result["table"]] if "table" in result else result.get("tables", [])
     for t in tables:
         if t.get("chart"):

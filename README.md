@@ -34,6 +34,8 @@ electricity price.
 | `app.py` | **Step 6.** The web interface (Gradio): chat, charts, comparisons, the resume question. |
 | `ui_render.py` | The display layer: number formatting, SVG charts, flow diagram, heatmap, colour-coded comparisons. |
 | `orchestrator_api.py` | **Step 7.** The Fantomaas entry point: JSON in, JSON out, baseline commits refused. |
+| `optimizer.py` | **Step 8.** `find_optimal_mix`: the LP, its self-checks, the four verification cases and the ship-gate. |
+| `OPTIMIZER_LP.md` | The LP formulation (Appendix D.1), why it is exact for this model, and the verification results. |
 | `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
 | `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
 | `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
@@ -302,6 +304,62 @@ Claude's text (Rule 1).
 - **Shared working state.** The orchestrator's amendments show up in the user's session. The change
   log records them with actor `orchestrator`, and the user's next visit offers to resume them.
 
+## Step 8 — the optimizer (`optimizer.py`, `find_optimal_mix`)
+
+"What's the best mix?" Maximise group CM, or one company's CM, by choosing:
+- local and export sales per company and product;
+- ERM's billet sourcing (one internal supplier and its share, with the rest from the market);
+- each furnace's blend of DRI, local scrap and imported scrap.
+
+It works within:
+- the DRI and finished-product capacity ceilings;
+- the 50/20/20 local-share floors;
+- the local markets (**the HRC market is asked every run**);
+- any extra bounds you give.
+
+Prices, yields, MRMR, consumptions and fixed costs are never changed. The formulation is in
+**[OPTIMIZER_LP.md](OPTIMIZER_LP.md)**.
+
+```python
+import optimizer
+r = optimizer.optimize(state, objective="group_cm",
+                       run_constraints={"local_market_ceilings": {"HRC": 120},
+                                        "additional_constraints": [
+                                            {"variable": "billet.companies.EZDK.blend_pct.dri", "min": 70, "max": 85}]})
+r["formulation"]; r["plan"]; r["cm"]; r["by_company"]; r["binding_constraints"]; r["self_checks"]
+store.update_inputs(r["changes"])        # only if the user chooses to apply it
+```
+
+- **Exact, not approximate.** Per-ton costs in the model don't depend on volume, so CM is linear
+  in volumes and in tons of each charge material. The LP's coefficients are read from the engine
+  itself, so the LP is the engine. Partial ERM sourcing (`split:<CO>:<share>`) is now an engine
+  input.
+- **Every run checks itself (D.4).** The answer is an error, never a number, if any check fails:
+  1. the engine recomputes the plan's CM, which must match to machine precision (typically
+     within 0.00001 $ on 65 M$);
+  2. the plan must pass every integrity check and every run constraint, measured on the engine's
+     outputs;
+  3. no feasible ±5% move of any single free variable may beat it.
+- **Answers:**
+  - the plan;
+  - CM now vs at the optimum, and by company;
+  - stage volumes;
+  - binding constraints with **shadow prices**, e.g. "+$37.58 CM per extra ton of EZDK DRI
+    capacity" (checked against a re-solve);
+  - the self-check results.
+
+  If no plan fits, it names a **minimal conflicting set of constraints** and returns no number.
+- **Ship-gate (D.3).** The four verification cases of D.2 run once per process (about 2 s). The
+  tool is offered to Claude and Fantomaas only if all four pass. Results are in OPTIMIZER_LP.md §10.
+- **Nothing is applied.** The plan comes with `changes`; Claude asks whether to apply it, save it
+  as a scenario, or neither. `changes` reach Claude at full precision: rounding would mean
+  applying a different, unverified plan.
+- **On the page**, the result is a colour-coded table (CM up is green ▲) under the plain-English
+  formulation.
+- **Read the blend results with care.** The data has no metallurgical blend limits or export
+  ceilings. With blends free, the optimum uses the cheapest charge, even up to 100% of one
+  material. Give bounds through `additional_constraints` (see OPTIMIZER_LP.md §11).
+
 ## Tests
 
 ```
@@ -316,5 +374,4 @@ sourcing decision in state, integrity checks, `compute_all`. The corrected model
 does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
 P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
 (§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
-Next step per the brief: Step 8, the optimizer (`find_optimal_mix`): the LP formulation first, then
-the solver, shipped only after its four verification cases pass (Appendix D.1–D.4).
+Next step per the brief: Step 9, polish.

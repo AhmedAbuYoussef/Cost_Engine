@@ -202,6 +202,35 @@ def test_buying_from_esr_moves_the_volume_to_esr(cs):
     assert ce.failed_errors(out) == []
 
 
+@pytest.mark.parametrize("supplier", ["EZDK", "EFS", "ESR"])
+def test_partial_sourcing_is_exact_and_linear(cs, supplier):
+    """split:<CO>:<share> — the optimizer's partial sourcing (internal share + market)."""
+    def go(src):
+        c = copy.deepcopy(cs)
+        c["sourcing"]["ERM_rebar_billet"] = src
+        return run(c)
+    full, none, part = go(f"offer:{supplier}"), go("market"), go(f"split:{supplier}:0.3")
+    assert usd(go(f"split:{supplier}:1")) == usd(full) and usd(go(f"split:{supplier}:0")) == usd(none)
+    s = part["sourcing"]
+    assert s["supplier"] == supplier and s["internal_share"] == 0.3
+    assert s["internal_t"] + s["market_t"] == pytest.approx(s["billets_t"])
+    assert s["internal_t"] == pytest.approx(0.3 * s["billets_t"])
+    assert usd(part)[f"{supplier}/Billet"]["total_qty"] == pytest.approx(s["internal_t"] / 1000)
+    for co in ("EZDK", "EFS", "ERM", "ESR", "Total"):        # every P&L line is linear in the share
+        for key in ("contribution_margin", "total_value", "variable_cogs"):
+            a = usd(full)[co if co == "Total" else f"{co}/Sub-Total"][key]
+            b = usd(none)[co if co == "Total" else f"{co}/Sub-Total"][key]
+            got = usd(part)[co if co == "Total" else f"{co}/Sub-Total"][key]
+            assert got == pytest.approx(0.3 * a + 0.7 * b, abs=1e-9), (co, key)
+    assert ce.failed_errors(part) == []
+
+
+@pytest.mark.parametrize("bad", ["split:EZDK:1.5", "split:ERM:0.5", "split:EZDK", "split:EZDK:-0.1"])
+def test_partial_sourcing_is_validated(cs, bad):
+    import state_schema
+    assert not state_schema.SOURCING_RE.match(bad)
+
+
 @pytest.mark.parametrize("change", ["tradeoff_ratio", "dri_margin"])
 def test_intercompany_prices_do_not_change_group_profit(cs, change):
     """A transfer price moves profit between companies, never the group's."""

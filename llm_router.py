@@ -68,7 +68,34 @@ def _path_catalogue(state: dict) -> str:
     return "\n".join(lines)
 
 
-def build_system_prompt(mode: str, state: dict) -> str:
+_OPTIMIZER_ON = """`find_optimal_mix` is available. Follow Pattern E for optimisation:
+  - **Before any solve**, show the run constraints and ask for overrides:
+    - capacity ceilings (from the state);
+    - the standing 50/20/20 local-share floors;
+    - Rebar and Wire Rod local markets (from the state).
+
+    Always ask for this month's local HRC market (kt); the state does not hold it. Confirm the
+    objective (`group_cm` or `company_cm` + company) and the free variables.
+  - **Present the result** starting with `formulation` (in plain English), then:
+    - the plan;
+    - `cm` (optimum vs now);
+    - `by_company`;
+    - `binding_constraints` with their shadow prices;
+    - `self_checks`.
+  - **Apply nothing.** Ask whether to apply the plan, save it as a scenario, or neither. To apply,
+    send the returned `changes` in ONE `update_input` call (`changes`). To save, apply it, then
+    `commit_state` save_as_scenario.
+  - **On `infeasible_optimization`**, name the `conflict` and suggest no relaxation unless asked.
+  - **Missing limits.** The data holds no metallurgical blend limits and no export demand ceilings.
+    When blending or exports are free, say the result shows the cheapest charge or full exports, and
+    offer bounds through `additional_constraints` (`{"variable": <path>, "min": …, "max": …}`)."""
+
+_OPTIMIZER_OFF = """`find_optimal_mix` is withheld: its four verification cases did not all pass in this
+  installation (Appendix D.3). If asked to optimise, say so and offer sensitivity runs or scenario
+  comparisons instead."""
+
+
+def build_system_prompt(mode: str, state: dict, optimizer: bool = False) -> str:
     """Sections 1–5 of the system prompt file (the runtime part — the revision notes and
     the build-time appendices stay out) plus notes on how this implementation behaves."""
     with open(PROMPT_FILE, encoding="utf-8") as f:
@@ -81,9 +108,8 @@ def build_system_prompt(mode: str, state: dict) -> str:
 - **Caller mode for this conversation: {mode}.** {"You are serving the direct user." if mode == "user" else
   "You are serving the Fantomaas orchestrator: structured JSON answers, no conversational overhead, and no baseline commits."}
 - **Tools.** The tool definitions attached to this conversation are authoritative for names and
-  arguments. `find_optimal_mix` is not available yet: it ships at a later build step, after its four
-  verification cases pass. If asked to optimise, say so and offer sensitivity runs or scenario
-  comparisons instead. To revert the latest amendment, call `undo_last_change`. Call it again to go
+  arguments. {_OPTIMIZER_ON if optimizer else _OPTIMIZER_OFF}
+  To revert the latest amendment, call `undo_last_change`. Call it again to go
   further back, after confirming with the user as for any state change. Undo cannot go back past a
   promotion, a discard, or loading another state.
 - **Tool results are JSON.** Reports return tables (`title`, `columns`, `rows` with `label`, `unit`,
@@ -130,15 +156,19 @@ def tool_definitions(toolbox) -> list:
 # Router
 # --------------------------------------------------------------------------- #
 
+EXACT_KEYS = {"changes"}      # values meant to be sent back as they are (an optimizer plan to apply)
+
+
 def _round_floats(obj, sig: int = 6):
     """Tool results go to Claude with 6 significant digits — plenty for 2-decimal display,
-    and far fewer tokens than full float precision."""
+    and far fewer tokens than full float precision.  ``changes`` (a plan Claude may pass back
+    to update_input) keeps full precision: a rounded plan is a different, unverified plan."""
     if isinstance(obj, float):
         if obj == 0 or not math.isfinite(obj):
             return obj
         return round(obj, sig - 1 - int(math.floor(math.log10(abs(obj)))))
     if isinstance(obj, dict):
-        return {k: _round_floats(v, sig) for k, v in obj.items()}
+        return {k: (v if k in EXACT_KEYS else _round_floats(v, sig)) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_round_floats(v, sig) for v in obj]
     return obj
@@ -168,8 +198,9 @@ class Router:
         self.toolbox, self.client = toolbox, client
         self.model, self.effort, self.max_tool_rounds = model, effort, max_tool_rounds
         self.use_fallbacks = use_fallbacks
-        self.system = build_system_prompt(toolbox.mode, toolbox.store.get_state("working"))
         self.tools = tool_definitions(toolbox)
+        self.system = build_system_prompt(toolbox.mode, toolbox.store.get_state("working"),
+                                          optimizer=any(t["name"] == "find_optimal_mix" for t in self.tools))
         self.messages: list = list(messages or [])     # a restored conversation continues as is
         self.tool_log: list = []
 

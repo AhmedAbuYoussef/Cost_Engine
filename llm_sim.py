@@ -92,6 +92,14 @@ def plan(question: str):
 def _plan(question: str):
     q = question.lower()
     co, prod, cur = _company(q), _product(q), _currency(q)
+    if re.search(r"\bapply (?:the |this )?plan\b", q):
+        return "apply_plan", {}
+    if re.search(r"\b(optimi[sz]e|optimal|best mix)", q):
+        args = {"objective": "company_cm", "company": co} if co and "group" not in q else {"objective": "group_cm"}
+        m = re.search(r"hrc market (?:is |of |at )?([\d.]+)", q)
+        if m:
+            args["run_constraints"] = {"local_market_ceilings": {"HRC": float(m.group(1))}}
+        return "find_optimal_mix", args
     m = re.search(r"\bset\s+([\w .]+?)\s+to\s+(-?[\d.]+)", question, re.I)
     if m:
         return "update_input", {"path": m.group(1).strip(), "value": float(m.group(2))}
@@ -224,6 +232,15 @@ def answer(tool: str, result: dict) -> str:
         if result.get("sourcing_change"):
             lines.append(f"⚠ {result['sourcing_change']['message']}")
         return "\n".join(lines)
+    if tool == "find_optimal_mix":
+        cm = result["cm"]
+        lines = ["**What was optimised**", ""] + [f"> {x}" for x in result["formulation"].splitlines()] + [
+            "", f"**Contribution margin:** {fmt(cm['current'])} → {fmt(cm['optimal'])} M$ "
+                f"({cm['delta']:+,.2f} M$ per month).",
+            "Self-checks passed: engine cross-check, integrity and run constraints, ±5% perturbation.",
+            "The plan, CM by company and the binding constraints (with shadow prices) are shown below.",
+            "", "Do you want to apply this plan to your working state, save it as a scenario, or neither?"]
+        return "\n".join(lines)
     if tool == "run_sensitivity":
         lines = [f"| {result['input_path']} | {result['output_metric']} ({result['unit']}) | status |", "|---:|---:|---|"]
         for p in result["points"]:
@@ -236,13 +253,30 @@ def answer(tool: str, result: dict) -> str:
 
 
 CAPABILITIES = ("I can update inputs, show cost sheets, P&Ls, sales and market share, fixed costs, "
-                "production requirements and the billet trade-off matrix, run sensitivities, compare "
-                "states, and save, promote or discard your session. What would you like to do?")
+                "production requirements and the billet trade-off matrix, run sensitivities, find the "
+                "optimal mix, compare states, and save, promote or discard your session. "
+                "What would you like to do?")
 
 
 # --------------------------------------------------------------------------- #
 # The client
 # --------------------------------------------------------------------------- #
+
+def _last_plan(messages):
+    """The ``changes`` of the latest successful find_optimal_mix result in the conversation."""
+    names = {}
+    for m in messages:
+        for b in (m["content"] if isinstance(m["content"], list) else []):
+            if _g(b, "type") == "tool_use":
+                names[_g(b, "id")] = _g(b, "name")
+    for m in reversed(messages):
+        for b in (m["content"] if isinstance(m["content"], list) else []):
+            if _g(b, "type") == "tool_result" and names.get(_g(b, "tool_use_id")) == "find_optimal_mix":
+                r = json.loads(_g(b, "content"))
+                if r.get("status") == "ok":
+                    return r["changes"]
+    return None
+
 
 class SimulatedClaude:
     def __init__(self):
@@ -262,6 +296,11 @@ class SimulatedClaude:
             text = "\n\n".join(answer(names.get(r["tool_use_id"]), json.loads(r["content"])) for r in results)
             return _response([_block(type="text", text=text)], "end_turn")
         p = plan(_text([b for b in content if not str(_g(b, "text") or "").startswith("[")]))
+        if p and p[0] == "apply_plan":
+            changes = _last_plan(request["messages"])
+            if changes is None:
+                return _response([_block(type="text", text="There is no optimizer plan to apply yet.")], "end_turn")
+            p = ("update_input", {"changes": changes})
         if p is None:
             return _response([_block(type="text", text=CAPABILITIES)], "end_turn")
         name, args = p

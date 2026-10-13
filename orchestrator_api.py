@@ -151,7 +151,8 @@ class OrchestratorAPI:
         return {"status": "ok", "caller": "orchestrator", "tools": tools,
                 "refused": [{"tool": "commit_state", "action": "promote_to_baseline"},
                             {"tool": "manage_baseline_refresh", "action": "*"}],
-                "unavailable": [s["name"] for s in TOOL_SPECS.values() if not s["available"]]}
+                "unavailable": sorted({s["name"] for s in TOOL_SPECS.values() if s["available"]}
+                                      - {t["name"] for t in tools} - {r for r in REFUSED})}
 
     def state(self) -> dict:
         with self._lock:

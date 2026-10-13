@@ -612,19 +612,33 @@ def compute_tradeoff_matrix(state: dict, vc: dict, market: float) -> dict:
 
 
 def resolve_billet_source(source: str, billet: dict) -> tuple:
-    """ERM's billet source → (price $/t, supplying company or None for market).
-    'market' | 'min' (cheapest row of the trade-off matrix) | 'offer:<CO>' (that
-    company's intercompany price) | 'vc:<CO>' (that company's VC, i.e. at cost)."""
+    """ERM's billet source → (average price $/t, supplying company or None, internal share,
+    internal price $/t).  'market' | 'min' (cheapest row of the trade-off matrix) |
+    'offer:<CO>' (that company's intercompany price) | 'vc:<CO>' (at the supplier's cost) |
+    'split:<CO>:<share>' (that share from <CO> at its intercompany price, the rest bought at
+    the market price — the optimizer's partial sourcing, system prompt Tool 12)."""
+    market = billet["market_price"]
     if source == "market":
-        return billet["market_price"], None
+        return market, None, 0.0, None
     if source == "min":
         src = billet["tradeoff"]["cheapest_source"]["ERM"]
-        return billet["tradeoff"]["minimum"]["ERM"], (None if src == "Market" else src)
-    kind, co = source.split(":")
+        price = billet["tradeoff"]["minimum"]["ERM"]
+        return (price, None, 0.0, None) if src == "Market" else (price, src, 1.0, price)
+    kind, co, *rest = source.split(":")
     if kind == "vc":
-        return billet[co]["total_variable_cost"], co
+        price = billet[co]["total_variable_cost"]
+        return price, co, 1.0, price
     if kind == "offer":
-        return billet["tradeoff"]["rows"][co]["ERM"], co
+        price = billet["tradeoff"]["rows"][co]["ERM"]
+        return price, co, 1.0, price
+    if kind == "split" and len(rest) == 1:
+        share = float(rest[0])
+        if not 0.0 <= share <= 1.0:
+            raise ValueError(f"internal share must be within 0..1: {source!r}")
+        internal = billet["tradeoff"]["rows"][co]["ERM"]
+        if share == 0.0:
+            return market, None, 0.0, None
+        return share * internal + (1.0 - share) * market, co, share, internal
     raise ValueError(f"unknown billet source {source!r}")
 
 
@@ -1089,8 +1103,9 @@ def _check_intercompany_reconciliation(outputs, fx):
         msgs.append(f"DRI: ERM sold {sold:.4f} M$, EFS+ESR bought {bought:.4f} M$")
     for key, c in cols.items():
         if c.get("intercompany") and c["product"] == "Billet":
-            erm = det["ERM Rolling"]
-            bought = erm["t.produced"] * erm["price.produced_billet"] / fx / 1e6
+            erm, src = det["ERM Rolling"], outputs["sourcing"]
+            spent = erm["t.produced"] * erm["price.produced_billet"] / fx / 1e6
+            bought = spent - src["market_t"] * src["market_price_usd_t"] / 1e6   # less the market part
             ok &= _close(bought, c["total_value"])
             msgs.append(f"billet: {c['company']} sold {c['total_value']:.4f} M$, ERM bought {bought:.4f} M$")
     return ok, "; ".join(msgs) or "no intercompany sales"
@@ -1267,7 +1282,8 @@ def compute_all(state: dict, rules: dict | None = None, strict: bool = False) ->
 
     # ERM's billet source.  Per-ton costs do not depend on volume, so the supplier's
     # sheet is re-run with the extra billets only to update its tonnages.
-    erm_price, erm_supplier = resolve_billet_source(state["sourcing"]["ERM_rebar_billet"], billet)
+    erm_price, erm_supplier, erm_share, erm_internal_price = resolve_billet_source(
+        state["sourcing"]["ERM_rebar_billet"], billet)
 
     def rolling(sheet, finished_t, yield_pct, billet_price):
         return _volume_safe(lambda t: compute_rolling_detail(
@@ -1276,14 +1292,15 @@ def compute_all(state: dict, rules: dict | None = None, strict: bool = False) ->
 
     det["ERM Rolling"] = rolling("ERM Rolling", sold_t("ERM", "Rebar", cv), fy["Rebar"]["ERM"], erm_price)
     erm_billets_t = det["ERM Rolling"]["t.produced"]
-    if rules["billet_interco"] and erm_supplier and erm_billets_t:
+    internal_t = erm_share * erm_billets_t          # bought from the supplier; the rest from the market
+    if rules["billet_interco"] and erm_supplier and internal_t:
         if erm_supplier == "ESR":
-            esr_link["extra_feed_t"] = erm_billets_t
+            esr_link["extra_feed_t"] = internal_t
             esr1 = esr_stage1(esr_link)
         else:
             sheet = f"{erm_supplier} Rebar"
             det[sheet] = integrated(sheet, long_link(erm_supplier, det[sheet]["finished_t"],
-                                                     long_extra[erm_supplier] + erm_billets_t))
+                                                     long_extra[erm_supplier] + internal_t))
     det["ESR Rebar"] = _volume_safe(
         lambda t: compute_esr_stage3(D["ESR Rebar"], {**esr_link, "finished_t": t}, fx,
                                      esr_stage1({**esr_link, "finished_t": t}),
@@ -1333,12 +1350,12 @@ def compute_all(state: dict, rules: dict | None = None, strict: bool = False) ->
                               "qty_kt": qty_t / 1000, "revenue_usd_m": sum(buyers.values()) / 1e6,
                               "cogs_usd_m": qty_t * dri_vc["ERM"] / 1e6,
                               "fixed_usd_m": fixed["allocation_usd_m"]["DRI"]["ERM"]}
-    if rules["billet_interco"] and erm_supplier and erm_billets_t:
+    if rules["billet_interco"] and erm_supplier and internal_t:
         sup_vc = billet[erm_supplier]["total_variable_cost"]
         interco[f"{erm_supplier}/Billet"] = {
             "seller": erm_supplier, "product": "Billet", "buyers": ["ERM"],
-            "qty_kt": erm_billets_t / 1000, "revenue_usd_m": erm_billets_t * erm_price / 1e6,
-            "cogs_usd_m": erm_billets_t * sup_vc / 1e6,
+            "qty_kt": internal_t / 1000, "revenue_usd_m": internal_t * erm_internal_price / 1e6,
+            "cogs_usd_m": internal_t * sup_vc / 1e6,
             "fixed_usd_m": {line: 0.0 for line, _ in _FIXED_LINES}}
 
     pnl = {v: compute_pnl(state, det, fixed, v, rules, interco) for v in PNL_VARIANTS}
@@ -1351,7 +1368,9 @@ def compute_all(state: dict, rules: dict | None = None, strict: bool = False) ->
         "consolidated": {v: compute_consolidated(p, rules) for v, p in pnl.items()},
         "sourcing": {"_currency": "USD", "ERM_rebar_billet": state["sourcing"]["ERM_rebar_billet"],
                      "price_usd_t": erm_price, "supplier": erm_supplier or "market",
-                     "billets_t": erm_billets_t},
+                     "billets_t": erm_billets_t, "internal_share": erm_share,
+                     "internal_t": internal_t, "market_t": erm_billets_t - internal_t,
+                     "internal_price_usd_t": erm_internal_price, "market_price_usd_t": billet["market_price"]},
         "rules": dict(rules),
     }
     outputs["dri"]["_currency"] = "LE"

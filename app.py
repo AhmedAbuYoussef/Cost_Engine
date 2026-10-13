@@ -43,6 +43,7 @@ EXAMPLES = [
     "Compare the working session with baseline 2026-04",
     "Run a sensitivity of dri.ERM.iop_landed_usd_t on ebt for ERM with a chart",
     "Show the fixed cost report in EGP with a chart",
+    "Find the optimal mix, the HRC market is 120",
 ]
 
 RESUME_OPTIONS = ["Resume where I left off", "Save it as a scenario", "Discard it"]

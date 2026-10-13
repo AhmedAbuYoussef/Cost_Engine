@@ -36,7 +36,7 @@ STAGE_LABEL = {"DRI": "DRI", "Billet": "billet", "Rebar": "rebar", "Wire Rod": "
 READ_ONLY_ROOTS = ("meta", "month_label", "rules_profile")
 FREE_FORM = ("meta", "billet.tradeoff_overrides")
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
-SOURCING_RE = re.compile(r"^(market|min|(vc|offer):(EZDK|EFS|ESR))$")
+SOURCING_RE = re.compile(r"^(market|min|(vc|offer):(EZDK|EFS|ESR)|split:(EZDK|EFS|ESR):(0(\.\d+)?|1(\.0*)?))$")
 
 ERROR_CODES = (
     "missing_required_arg", "invalid_path", "structural_non_existence",
@@ -49,10 +49,11 @@ ERROR_CODES = (
 class ModelError(Exception):
     """A refusal in the system prompt's error format."""
 
-    def __init__(self, code: str, message: str, field: str | None = None, expected=None):
+    def __init__(self, code: str, message: str, field: str | None = None, expected=None, **details):
         assert code in ERROR_CODES, code
         super().__init__(message)
         self.code, self.message, self.field, self.expected = code, message, field, expected
+        self.details = details          # extra structured context, e.g. an optimizer's conflict set
 
     def to_dict(self) -> dict:
         d = {"status": "error", "error_code": self.code, "error_message": self.message}
@@ -60,6 +61,7 @@ class ModelError(Exception):
             d["field"] = self.field
         if self.expected is not None:
             d["expected"] = self.expected
+        d.update(self.details)
         return d
 
 
@@ -272,7 +274,7 @@ def _validate(value, tmpl, path: str, problems: list):
             _validate(value[k], tmpl[k], f"{path}.{k}" if path else k, problems)
         return
     if isinstance(tmpl, str):
-        rules = {"sourcing.ERM_rebar_billet": (SOURCING_RE, "market | min | vc:<CO> | offer:<CO>"),
+        rules = {"sourcing.ERM_rebar_billet": (SOURCING_RE, "market | min | vc:<CO> | offer:<CO> | split:<CO>:<internal share 0..1>"),
                  "rules_profile": (re.compile(r"^corrected$"), "corrected"),
                  "month_label": (MONTH_RE, "YYYY-MM")}
         rx, want = rules.get(path, (None, "text"))

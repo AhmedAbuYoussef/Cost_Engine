@@ -62,11 +62,16 @@ def test_fourteen_tools_with_valid_schemas():
         assert hasattr(tools.ToolBox, name)
 
 
-def test_visible_tools_follow_the_ship_gate_and_permissions(box, fantomaas):
-    assert len(box.visible_tools()) == 14                       # optimizer hidden until step 8
-    assert "find_optimal_mix" not in {t["name"] for t in box.visible_tools()}
+def test_visible_tools_follow_the_ship_gate_and_permissions(box, fantomaas, monkeypatch):
+    assert len(box.visible_tools()) == 15                       # the optimizer passed its gate (D.3)
+    assert "find_optimal_mix" in {t["name"] for t in box.visible_tools()}
+    assert "find_optimal_mix" in {t["name"] for t in fantomaas.visible_tools()}       # an analysis tool
     assert "manage_baseline_refresh" not in {t["name"] for t in fantomaas.visible_tools()}
-    assert code(box.call("find_optimal_mix", {"objective": "group_cm"})) == "tool_unavailable"
+    failed = {"passed": False, "cases": [{"case": "identity", "passed": False, "detail": "CM moved"}]}
+    monkeypatch.setattr(tools, "optimizer_gate", lambda: failed)                  # a failing gate withholds it
+    assert "find_optimal_mix" not in {t["name"] for t in box.visible_tools()}
+    r = box.call("find_optimal_mix", {"objective": "group_cm"})
+    assert r["error_code"] == "tool_unavailable" and "identity: CM moved" in r["error_message"]
 
 
 @pytest.mark.parametrize("name, args, expected", [
