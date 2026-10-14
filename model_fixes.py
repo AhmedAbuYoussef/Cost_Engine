@@ -201,11 +201,35 @@ DEFAULT_POLICY_FLOORS = {"local_share_min": {"Rebar": 0.50, "Wire Rod": 0.20, "H
 DEFAULT_MONTH_LABEL = "2026-04"
 
 
+def _limits(dri, local_max, imported_max):
+    return {"dri": {"min_pct": dri[0], "max_pct": dri[1]},
+            "local_scrap": {"min_pct": 0.0, "max_pct": local_max},
+            "imported_scrap": {"min_pct": 0.0, "max_pct": imported_max}}
+
+
+# Charge-mix limits per furnace (% of solid charge) and the group's monthly local-scrap supply.
+# Not in any workbook (it holds point blends only).  Sources, per value, in MODEL_FIXES.md:
+# DRI max 95% and flat imported scrap ≤ 20% (copper) from the literature; EZDK flat DRI ≥ 70%
+# from Ezz's verified EPD; ESR DRI ≤ 30% (no reduction plant, bucket charging); the rest are
+# assumptions for the user to confirm.
+DEFAULT_BLEND_LIMITS = {
+    "furnaces": {
+        "EZDK long": _limits((65.0, 95.0), 25.0, 30.0),
+        "EFS long": _limits((65.0, 95.0), 25.0, 30.0),
+        "ESR long": _limits((0.0, 30.0), 40.0, 100.0),
+        "EZDK flat": _limits((70.0, 95.0), 25.0, 20.0),
+        "EFS flat": _limits((70.0, 95.0), 25.0, 20.0),
+    },
+    "local_scrap_supply_kt": 82.0,       # ≈ 1.5 × today's group use (54.8 kt: long 34.6 + flat 20.2)
+}
+
+
 def _complete_state(state: dict) -> None:
     """Blocks the system prompt's Appendix A requires, and one source of truth for capacity
     (the monthly ceiling replaces the workbook's duplicate annual DRI capacity cell)."""
     state.setdefault("month_label", DEFAULT_MONTH_LABEL)
     state.setdefault("policy_floors", copy.deepcopy(DEFAULT_POLICY_FLOORS))
+    state.setdefault("blend_limits", copy.deepcopy(DEFAULT_BLEND_LIMITS))
     for d in state["dri"].values():
         d.pop("capacity_t", None)
         d.pop("capacity_utilization", None)     # never referenced by any formula

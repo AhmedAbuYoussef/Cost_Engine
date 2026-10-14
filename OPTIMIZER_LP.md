@@ -101,6 +101,12 @@ The engine cross-check found this the first time a company run was tried. It ref
    - a locked sales quantity is fixed at its value;
    - a locked blend keeps its shares: `Y[f,k] = b₀_fk · F_f(v)`;
    - locked sourcing keeps the current supplier and share: `I = s₀ · B_ERM(v)`.
+7b. **Charge-mix limits** (`state["blend_limits"]`, see [BLEND_LIMITS.md](BLEND_LIMITS.md)):
+   - `min% · F ≤ Y[f,k] ≤ max% · F` on every running furnace;
+   - group local scrap `Σ_f Y[f, local scrap] ≤` supply (kt).
+
+   Both are linear, applied by default, and can be overridden per run. A held blend outside a
+   lowered limit is still feasible by idling that furnace: an idle furnace has no mix to limit.
 8. **Additional constraints** (`run_constraints.additional_constraints`):
    `{"variable": <path>, "min": …, "max": …}` on a sales quantity (kt), a blend share (%), or
    `sourcing.ERM_internal_share` (0–1). Blend shares are bounded linearly as
@@ -171,10 +177,9 @@ and offers `find_optimal_mix` only if all pass (D.3); otherwise the tool answers
 
 ## 11. Choices to confirm (the data has no limits for these)
 
-- **Blending has no metallurgical limits in the model.** With blends free, the LP picks the
-  cheapest charge, up to 100% of one material. Real furnaces have DRI and scrap limits, and scrap
-  availability is finite. **Recommendation: give blend bounds per furnace** (constraint 8). Until
-  then, read blend results as "which material is cheapest", not as an operating plan.
+- **Charge-mix limits** are now standing data. Several values are assumptions awaiting the plant's
+  figures; see [BLEND_LIMITS.md](BLEND_LIMITS.md) for each value's source and the three open
+  questions.
 - **Exports are unconstrained.** There is no export demand ceiling, so with positive export
   margins the LP fills capacity. Recommendation: export ceilings as additional constraints when
   known.

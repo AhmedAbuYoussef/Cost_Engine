@@ -246,6 +246,8 @@ def _range_problem(path: str, v: float):
         frac = path.startswith("detail.")
         top = 1 if frac else 100
         return None if v <= top else f"a share ≤ {top}"
+    if path.startswith("blend_limits.") and key.endswith("_pct"):
+        return None if v <= 100 else "a share of the charge ≤ 100%"
     if ".feed_share." in path or path.startswith("policy_floors."):
         return None if v <= 1 else "a share between 0 and 1"
     if key == "mrmr":
@@ -303,6 +305,12 @@ def validate(state: dict, template: dict | None = None) -> None:
     template = template if template is not None else load_template()
     problems: list = []
     _validate(state, template, "", problems)
+    for f, mats in (state.get("blend_limits") or {}).get("furnaces", {}).items():
+        for k, lim in mats.items():
+            if isinstance(lim, dict) and _num(lim.get("min_pct")) and _num(lim.get("max_pct")) \
+                    and lim["min_pct"] > lim["max_pct"]:
+                problems.append((f"blend_limits.furnaces.{f}.{k}.min_pct", f"≤ max_pct ({lim['max_pct']})",
+                                 lim["min_pct"]))
     if problems:
         p, want, got = problems[0]
         more = f" (+{len(problems) - 1} more: " + "; ".join(x[0] for x in problems[1:6]) + ")" \

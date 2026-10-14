@@ -284,3 +284,73 @@ def test_the_page_draws_the_optimizer_result(base):
     assert "EZDK DRI ≤ 250,000 t" in h and "Shadow price" in h
     for tag in ("div", "table", "tr", "td"):
         assert len(re.findall(rf"<{tag}[\s>]", h)) == h.count(f"</{tag}>"), tag
+
+
+# ---- standing charge-mix limits (state["blend_limits"]) ------------------------------------------- #
+
+def _mix(r):
+    out = {}
+    for b in r["plan"]["blending"]:
+        out.setdefault(b["furnace"], {})[b["material"]] = b["optimal_pct"]
+    return out
+
+
+def test_standing_blend_limits_apply_by_default(base):
+    r = opt.optimize(base, run_constraints=HRC)
+    assert r["self_checks"]["all_passed"]
+    lim = base["blend_limits"]
+    for f, mats in _mix(r).items():
+        for k, v in mats.items():
+            b = lim["furnaces"][f][k]
+            assert b["min_pct"] - 1e-6 <= v <= b["max_pct"] + 1e-6, (f, k, v)
+    assert "EZDK flat charge mix: dri 70–95%" in r["formulation"]
+    assert "Group local scrap ≤ 82.0 kt/month" in r["formulation"]
+    free = opt.optimize(base, run_constraints={**HRC, "blend_limits": {
+        "furnaces": {f: {k: {"min_pct": 0, "max_pct": 100} for k in opt.MATERIALS} for f in opt.FURNACES},
+        "local_scrap_supply_kt": None}})
+    assert free["cm"]["optimal"] > r["cm"]["optimal"]                 # the limits cost CM, as they should
+    assert any(v >= 99.99 for mats in _mix(free).values() for v in mats.values())   # unlimited → extremes
+
+
+def test_a_blend_limit_shadow_price_matches_a_re_solve(base):
+    r = opt.optimize(base, run_constraints=HRC)
+    b = next(x for x in r["binding_constraints"] if x["constraint"] == "blend limit: EZDK flat dri ≥ 70% of charge")
+    # a marginal rate: the limit multiplies a tonnage that also moves, so check it on a small step
+    r2 = opt.optimize(base, run_constraints={**HRC, "blend_limits": {"furnaces": {"EZDK flat": {"dri": {"min_pct": 69.99}}}}})
+    assert (r2["cm"]["optimal"] - r["cm"]["optimal"]) * 1e6 / 0.01 == pytest.approx(b["shadow_price"], rel=2e-3)
+
+
+def test_local_scrap_supply_binds(base):
+    r = opt.optimize(base, run_constraints={**HRC, "blend_limits": {"local_scrap_supply_kt": 30}})
+    assert r["self_checks"]["all_passed"]
+    assert any(b["constraint"] == "local scrap supply" for b in r["binding_constraints"])
+
+
+def test_a_blend_limit_in_a_conflict_is_named(base):
+    """EFS long held at today's 80% DRI while its limit is lowered to 70%, and EFS's rebar sales held
+    (otherwise idling the furnace is a legitimate way out) → no plan; the clash is named."""
+    free = [p for p in opt._sales_paths(base) if ".EFS.Rebar." not in p] + \
+        ["EZDK long", "ESR long", "EZDK flat", "EFS flat"]
+    with pytest.raises(ModelError) as e:
+        opt.optimize(base, free_variables=free, run_constraints={
+            **HRC, "blend_limits": {"furnaces": {"EFS long": {"dri": {"max_pct": 70}}}}})
+    names = [c["constraint"] for c in e.value.details["conflict"]]
+    assert "blend limit: EFS long dri ≤ 70% of charge" in names and "held fixed: EFS long blend" in names
+    # without the held sales, the optimizer idles EFS long instead — feasible, and checked
+    free_all = free + [p for p in opt._sales_paths(base) if ".EFS.Rebar." in p]
+    r = opt.optimize(base, free_variables=free_all, run_constraints={
+        **HRC, "blend_limits": {"furnaces": {"EFS long": {"dri": {"max_pct": 70}}}}})
+    assert r["self_checks"]["all_passed"]
+    assert all(x["optimal_kt"] == 0 for x in r["plan"]["sales"] if ".EFS.Rebar." in x["path"])
+
+
+@pytest.mark.parametrize("override, code", [
+    ({"furnaces": {"ERM long": {"dri": {"max_pct": 50}}}}, "invalid_path"),
+    ({"furnaces": {"EZDK long": {"coke": {"max_pct": 50}}}}, "invalid_path"),
+    ({"furnaces": {"EZDK long": {"dri": {"min_pct": 96}}}}, "schema_validation_error"),
+    ({"budget": 1}, "schema_validation_error"),
+])
+def test_bad_blend_limit_overrides(base, override, code):
+    with pytest.raises(ModelError) as e:
+        opt.optimize(base, run_constraints={**HRC, "blend_limits": override})
+    assert e.value.code == code

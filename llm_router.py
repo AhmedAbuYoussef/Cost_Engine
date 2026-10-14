@@ -86,9 +86,13 @@ _OPTIMIZER_ON = """`find_optimal_mix` is available. Follow Pattern E for optimis
     send the returned `changes` in ONE `update_input` call (`changes`). To save, apply it, then
     `commit_state` save_as_scenario.
   - **On `infeasible_optimization`**, name the `conflict` and suggest no relaxation unless asked.
-  - **Missing limits.** The data holds no metallurgical blend limits and no export demand ceilings.
-    When blending or exports are free, say the result shows the cheapest charge or full exports, and
-    offer bounds through `additional_constraints` (`{"variable": <path>, "min": …, "max": …}`)."""
+  - **Charge-mix limits.** The state's standing limits (`blend_limits`: min/max share of DRI, local
+    and imported scrap per furnace, and the group's local scrap supply) apply by default. Show them
+    with the other run constraints. Several values are assumptions awaiting the plant's figures, so
+    say so when a blend limit binds. Per-run overrides go in `run_constraints.blend_limits`.
+  - **No export demand ceilings in the data.** When exports are free, say the result fills
+    capacity with exports wherever they pay, and offer bounds through `additional_constraints`
+    (`{"variable": <path>, "min": …, "max": …}`)."""
 
 _OPTIMIZER_OFF = """`find_optimal_mix` is withheld: its four verification cases did not all pass in this
   installation (Appendix D.3). If asked to optimise, say so and offer sensitivity runs or scenario

@@ -51,7 +51,7 @@ def sheet_for(path: str) -> str | None:
         return "Finished Products"
     if root in ("sales", "pnl", "total_local_market_kt"):
         return "Sales"
-    if root in ("fixed_cost", "capacity_ceilings", "policy_floors"):
+    if root in ("fixed_cost", "capacity_ceilings", "policy_floors", "blend_limits"):
         return "Fixed Costs & Capacity"
     raise ModelError("schema_validation_error", f"no template sheet for input {path!r}", field=path)
 

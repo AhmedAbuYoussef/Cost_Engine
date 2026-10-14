@@ -74,6 +74,17 @@ typed-in results.
    - With ERM buying its billets from EZDK, EZDK needs **261.6 kt/month of DRI against 250 kt** (104.6%). This is the upstream check rulebook §4.7 asks for: either part of ERM's billets come from EFS or the market, or the ceiling is wrong.
    - EZDK wire rod runs at 50 kt against a 41.7 kt "capacity". That cell on the Wire sheet looks copy-pasted from ERM's (same label, same 16.08% utilisation), so it is probably not the real wire capacity.
 
+6. **EZDK's local scrap price: 300 $/t (long line) vs 248.87 $/t (flat line).** Both are typed
+   constants. One company paying two prices for the same material looks like an error, but which
+   one is wrong is unclear:
+   - 300 is a round placeholder-looking number, the same for local and imported scrap;
+   - 248.87 is EFS's local price on both of EFS's lines.
+
+   It decides where scrap beats DRI (DRI costs 262–266 $/t). Left as is until you say which.
+7. **Charge-mix limits** (new state block `blend_limits`). Values and sources are in
+   [BLEND_LIMITS.md](BLEND_LIMITS.md). The [A] values are assumptions: the plant's real DRI
+   ranges, local scrap supply (82 kt/month) and ESR's DRI ceiling replace them.
+
 ## Not modelled
 
 The detail sheets' own fixed-cost/COGS blocks (e.g. `EZDK Rebar` rows 206–235). The P&L

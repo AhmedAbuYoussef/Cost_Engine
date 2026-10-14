@@ -822,5 +822,80 @@
    "Wire Rod": 0.2,
    "HRC": 0.2
   }
+ },
+ "blend_limits": {
+  "furnaces": {
+   "EZDK long": {
+    "dri": {
+     "min_pct": 65.0,
+     "max_pct": 95.0
+    },
+    "local_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 25.0
+    },
+    "imported_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 30.0
+    }
+   },
+   "EFS long": {
+    "dri": {
+     "min_pct": 65.0,
+     "max_pct": 95.0
+    },
+    "local_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 25.0
+    },
+    "imported_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 30.0
+    }
+   },
+   "ESR long": {
+    "dri": {
+     "min_pct": 0.0,
+     "max_pct": 30.0
+    },
+    "local_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 40.0
+    },
+    "imported_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 100.0
+    }
+   },
+   "EZDK flat": {
+    "dri": {
+     "min_pct": 70.0,
+     "max_pct": 95.0
+    },
+    "local_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 25.0
+    },
+    "imported_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 20.0
+    }
+   },
+   "EFS flat": {
+    "dri": {
+     "min_pct": 70.0,
+     "max_pct": 95.0
+    },
+    "local_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 25.0
+    },
+    "imported_scrap": {
+     "min_pct": 0.0,
+     "max_pct": 20.0
+    }
+   }
+  },
+  "local_scrap_supply_kt": 82.0
  }
 }

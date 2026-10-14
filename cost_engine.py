@@ -1130,7 +1130,35 @@ def _check_summary_matches_detail(outputs):
 
 # A failed "error" check means the numbers cannot be trusted; a failed "warning" check
 # (capacity) means the plan is physically stretched — reported, never blocking.
-CHECK_SEVERITY = {"capacity_within_limits": "warning"}
+CHECK_SEVERITY = {"capacity_within_limits": "warning", "blend_within_limits": "warning"}
+
+# furnace name (as in state["blend_limits"]) → (blend location in the state, detail sheet)
+FURNACE_LINES = {"EZDK long": (("billet", "companies", "EZDK"), "EZDK Rebar"),
+                 "EFS long": (("billet", "companies", "EFS"), "EFS Rebar"),
+                 "ESR long": (("billet", "companies", "ESR"), "ESR Rebar"),
+                 "EZDK flat": (("flat", "EZDK"), "EZDK Flat"),
+                 "EFS flat": (("flat", "EFS"), "EFS Flat")}
+
+
+def _check_blend_limits(state, outputs):
+    """Each furnace's charge mix within its standing limits, and the group's local scrap within
+    what the market can supply (state['blend_limits']; operating limits, not model errors)."""
+    lim = state["blend_limits"]
+    bad = []
+    for f, mats in lim.get("furnaces", {}).items():
+        node = state
+        for seg in FURNACE_LINES[f][0]:
+            node = node[seg]
+        for k, b in mats.items():
+            v = node["blend_pct"][k]
+            if v < b["min_pct"] - 1e-9 or v > b["max_pct"] + 1e-9:
+                bad.append(f"{f} {k.replace('_', ' ')} {v:.1f}% outside {b['min_pct']:g}–{b['max_pct']:g}%")
+    supply = lim.get("local_scrap_supply_kt")
+    if supply is not None:
+        used = sum(outputs["detail"][sheet]["s1.t.local"] for _, sheet in FURNACE_LINES.values()) / 1000
+        if used > supply + 1e-9:
+            bad.append(f"local scrap {used:,.1f} kt/month above the {supply:,.1f} kt the market can supply")
+    return (not bad, "every charge mix within its limits" if not bad else "; ".join(bad))
 
 
 def compute_capacity(state: dict, outputs: dict) -> dict:
@@ -1179,6 +1207,8 @@ def run_integrity_checks(state: dict, outputs: dict | None = None, rules: dict |
             res.append(("summary_matches_detail", *_check_summary_matches_detail(outputs)))
         if outputs.get("capacity", {}).get("items"):
             res.append(("capacity_within_limits", *_check_capacity(outputs["capacity"])))
+        if state.get("blend_limits"):
+            res.append(("blend_within_limits", *_check_blend_limits(state, outputs)))
     return res
 
 

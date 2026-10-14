@@ -94,11 +94,11 @@ class _Row:
 
 def _run_settings(state, run_constraints):
     rc = dict(run_constraints or {})
-    unknown = set(rc) - {"capacity_ceilings", "policy_floors", "local_market_ceilings", "additional_constraints"}
+    keys = ["capacity_ceilings", "policy_floors", "local_market_ceilings", "blend_limits", "additional_constraints"]
+    unknown = set(rc) - set(keys)
     if unknown:
         raise ModelError("schema_validation_error", f"unknown run_constraints {sorted(unknown)}",
-                         field="run_constraints", expected=["capacity_ceilings", "policy_floors",
-                                                            "local_market_ceilings", "additional_constraints"])
+                         field="run_constraints", expected=keys)
     caps = copy.deepcopy(state["capacity_ceilings"])
     over = rc.get("capacity_ceilings") or {}
     for co, v in (over.get("dri") or {}).items():
@@ -125,11 +125,41 @@ def _run_settings(state, run_constraints):
         markets[prod] = None if v is None else float(v)
     if (rc.get("local_market_ceilings") or {}).get("HRC") is None:
         return None                                    # HRC must be given fresh every run
+    blend = _blend_limits(state, rc.get("blend_limits"))
     extra = rc.get("additional_constraints") or []
     if not isinstance(extra, list):
         raise ModelError("schema_validation_error", "additional_constraints must be a list",
                          field="run_constraints.additional_constraints")
-    return {"capacity": caps, "floors": floors, "markets": markets, "extra": extra}
+    return {"capacity": caps, "floors": floors, "markets": markets, "blend": blend, "extra": extra}
+
+
+def _blend_limits(state, override):
+    """The state's standing charge-mix limits, with this run's overrides merged in.  An override
+    has the same shape: {"furnaces": {<furnace>: {<material>: {"min_pct", "max_pct"}}},
+    "local_scrap_supply_kt": kt | None (None = no supply cap this run)}."""
+    lim = copy.deepcopy(state.get("blend_limits") or {"furnaces": {}, "local_scrap_supply_kt": None})
+    over = override or {}
+    if not isinstance(over, dict) or set(over) - {"furnaces", "local_scrap_supply_kt"}:
+        raise ModelError("schema_validation_error", "blend_limits is {furnaces: {…}, local_scrap_supply_kt}",
+                         field="run_constraints.blend_limits")
+    for f, mats in (over.get("furnaces") or {}).items():
+        if f not in FURNACES:
+            raise ModelError("invalid_path", f"no furnace {f!r}", field=f, expected=list(FURNACES))
+        for k, b in mats.items():
+            if k not in MATERIALS or not isinstance(b, dict) or set(b) - {"min_pct", "max_pct"}:
+                raise ModelError("invalid_path", f"blend limit {f}.{k} must be {{min_pct, max_pct}} for "
+                                 f"one of {list(MATERIALS)}", field=f"{f}.{k}")
+            cur = lim["furnaces"].setdefault(f, {}).setdefault(k, {"min_pct": 0.0, "max_pct": 100.0})
+            cur.update({x: float(v) for x, v in b.items()})
+    if "local_scrap_supply_kt" in over:
+        v = over["local_scrap_supply_kt"]
+        lim["local_scrap_supply_kt"] = None if v is None else float(v)
+    for f, mats in lim["furnaces"].items():
+        for k, b in mats.items():
+            if not 0 <= b["min_pct"] <= b["max_pct"] <= 100:
+                raise ModelError("schema_validation_error", f"blend limit {f} {k}: need 0 ≤ min ≤ max ≤ 100, "
+                                 f"got {b['min_pct']}–{b['max_pct']}", field=f"blend_limits.furnaces.{f}.{k}")
+    return lim
 
 
 def _free_set(state, free_variables):
@@ -354,6 +384,27 @@ class _Model:
                     coef[self.iq[f"sales.{co}.{prod}.local_kt"]] = 1.0
             rows.append(_Row(coef, "<=", m, f"local market ceiling {prod}",
                              f"{prod}: group local sales ≤ {m:,.1f} kt (local market)", "market", {"per": "t"}))
+        # 5b charge-mix limits (% of the furnace's solid charge) and the group's local scrap supply
+        bl = settings["blend"]
+        for f, mats in bl["furnaces"].items():
+            sc_c, sc_k = self.sc_expr[f]
+            for k, b in mats.items():
+                for side, pct in (("min", b["min_pct"]), ("max", b["max_pct"])):
+                    if (side == "min" and pct <= 0) or (side == "max" and pct >= 100):
+                        continue                              # no limit on that side
+                    sgn = -1 if side == "min" else 1          # min: −(Y − m·SC) ≤ 0
+                    coef = -sgn * (pct / 100) * sc_c / 1000
+                    coef[self.iY[(f, k)]] += sgn
+                    label = f"{f} {k.replace('_', ' ')} {'≥' if side == 'min' else '≤'} {pct:g}% of charge"
+                    rows.append(_Row(coef, "<=", sgn * (pct / 100) * sc_k / 1000,
+                                     f"blend limit: {label}", label, "blend", {"furnace": f, "side": side}))
+        if bl.get("local_scrap_supply_kt") is not None:
+            coef = zero()
+            for f in FURNACES:
+                coef[self.iY[(f, "local_scrap")]] = 1.0
+            sup = bl["local_scrap_supply_kt"]
+            rows.append(_Row(coef, "<=", sup, "local scrap supply",
+                             f"group local scrap ≤ {sup:,.1f} kt (what the market can supply)", "capacity"))
         # 7 locks
         for p in lin.sales:
             if p not in free_sales:
@@ -602,13 +653,20 @@ def _binding(m: _Model, res, ub, x):
     marg = res.ineqlin.marginals if ub else []
     for r, mu in zip(ub, marg):
         slack = r.rhs - float(r.coef @ x)
-        if abs(slack) > 1e-7 or abs(mu) < 1e-9 or r.kind not in ("capacity", "floor", "market", "extra"):
+        if abs(slack) > 1e-7 or abs(mu) < 1e-9 or r.kind not in ("capacity", "floor", "market", "blend", "extra"):
             continue
         shadow = -mu                                   # linprog minimises −CM
         entry = {"constraint": r.group, "description": r.label}
         if r.kind in ("capacity", "market"):
             entry.update({"shadow_price": shadow / 1000, "unit": "$ CM per extra ton per month",
                           "text": f"+${shadow / 1000:,.2f} CM per extra ton ({r.label})"})
+        elif r.kind == "blend":
+            sc_c, sc_k = m.sc_expr[r.meta["furnace"]]
+            per_pp = shadow * float(sc_c @ x + sc_k) / 1000 * 0.01
+            if abs(per_pp) < 0.5:                        # binding in name only
+                continue
+            entry.update({"shadow_price": per_pp, "unit": "$ CM per percentage point more room, at the margin",
+                          "text": f"+${per_pp:,.0f} CM per pp more room, at the margin ({r.label})"})
         elif r.kind == "floor":
             prod = r.meta["product"]
             total = sum(float(x[m.iq[f"sales.{co}.{prod}.{k}"]]) for co in ce.COMPANIES
@@ -660,6 +718,18 @@ def _violations(m: _Model, state, outputs, locks=False, tol=1e-6):
     for f, (bp, _, _) in FURNACES.items():
         if any(x < -tol for x in schema.get(state, bp).values()):
             v.append(f"{f} has a negative blend share")
+    bl = s["blend"]
+    for f, mats in bl["furnaces"].items():
+        if outputs["detail"][FURNACES[f][1]]["s1.solid_charge_t"] <= 1e-6:
+            continue                                   # an idle furnace has no charge mix to limit
+        shares = schema.get(state, FURNACES[f][0])
+        for k, b in mats.items():
+            if not b["min_pct"] - 1e-7 <= shares[k] <= b["max_pct"] + 1e-7:
+                v.append(f"{f} {k} {shares[k]:.4f}% outside {b['min_pct']:g}–{b['max_pct']:g}%")
+    if bl.get("local_scrap_supply_kt") is not None:
+        used = sum(outputs["detail"][sheet]["s1.t.local"] for _, sheet, _ in FURNACES.values()) / 1000
+        if used > bl["local_scrap_supply_kt"] * (1 + tol) + tol:
+            v.append(f"local scrap {used:,.2f} kt > supply {bl['local_scrap_supply_kt']:,.1f} kt")
     return v
 
 
@@ -806,6 +876,14 @@ def formulation_text(m: _Model) -> str:
     lines.append("- Per furnace: DRI + local scrap + imported scrap = the charge left after the fixed home "
                  "scrap and pig iron shares (blending sums to 100%)")
     lines.append("- ERM billets: internal + market = billets needed for ERM's rebar; 0 ≤ internal share ≤ 1")
+    bl = s["blend"]
+    for f, mats in bl["furnaces"].items():
+        parts = [f"{k.replace('_', ' ')} {b['min_pct']:g}–{b['max_pct']:g}%" for k, b in mats.items()
+                 if b["min_pct"] > 0 or b["max_pct"] < 100]
+        if parts:
+            lines.append(f"- {f} charge mix: " + ", ".join(parts))
+    if bl.get("local_scrap_supply_kt") is not None:
+        lines.append(f"- Group local scrap ≤ {bl['local_scrap_supply_kt']:,.1f} kt/month (market supply)")
     for prod, phi in s["floors"].items():
         lines.append(f"- {prod}: Σ local sales ≥ {phi:.2f} × Σ {prod} production")
     for prod, mk in s["markets"].items():

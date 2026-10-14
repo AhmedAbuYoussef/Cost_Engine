@@ -36,6 +36,7 @@ electricity price.
 | `orchestrator_api.py` | **Step 7.** The Fantomaas entry point: JSON in, JSON out, baseline commits refused. |
 | `optimizer.py` | **Step 8.** `find_optimal_mix`: the LP, its self-checks, the four verification cases and the ship-gate. |
 | `OPTIMIZER_LP.md` | The LP formulation (Appendix D.1), why it is exact for this model, and the verification results. |
+| `BLEND_LIMITS.md` | The charge-mix limits per furnace: values, sources, effect, open questions. |
 | `excel_io.py` | Reads any version of the workbook into a (legacy) state, reads Excel's results, and checks a file runs the same formulas. |
 | `excel_map.py` | The Excel cell for every legacy output (used by the tests). |
 | `MODEL_FIXES.md`, `reports/fix_bridge.md` | What was fixed, why, and the effect on the numbers. |
@@ -356,9 +357,12 @@ store.update_inputs(r["changes"])        # only if the user chooses to apply it
   applying a different, unverified plan.
 - **On the page**, the result is a colour-coded table (CM up is green ▲) under the plain-English
   formulation.
-- **Read the blend results with care.** The data has no metallurgical blend limits or export
-  ceilings. With blends free, the optimum uses the cheapest charge, even up to 100% of one
-  material. Give bounds through `additional_constraints` (see OPTIMIZER_LP.md §11).
+- **Charge-mix limits** are standing model data: `blend_limits` holds min/max DRI, local and
+  imported scrap per furnace, and the group's local scrap supply. The optimizer applies them by
+  default, and the engine warns (`blend_within_limits`) when a stored blend leaves them. Values,
+  sources and the open questions for the plant are in **[BLEND_LIMITS.md](BLEND_LIMITS.md)**. On
+  the dummy baseline they take the optimum from 65.62 down to 51.97 M$/month. The data has no
+  export demand ceilings, so give those through `additional_constraints`.
 
 ## Tests
 

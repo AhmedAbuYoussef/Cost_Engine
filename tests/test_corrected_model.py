@@ -45,8 +45,10 @@ def test_baseline_passes_every_integrity_check(cs):
     assert {c["check"] for c in out["integrity"]} == {
         "fixed_distribution_100", "blending_100", "no_hardcoded_results", "currency_tagged",
         "break_even_zero", "intercompany_reconciles", "summary_matches_detail",
-        "capacity_within_limits"}
+        "capacity_within_limits", "blend_within_limits"}
     assert ce.failed_errors(out) == []
+    blend = next(c for c in out["integrity"] if c["check"] == "blend_within_limits")
+    assert blend["severity"] == "warning" and blend["passed"]         # today's mixes are within the limits
     # capacity is a warning: with ERM's billets EZDK needs 104.6% of its DRI capacity, and
     # wire rod runs above the (doubtful) workbook ceiling
     cap = next(c for c in out["integrity"] if c["check"] == "capacity_within_limits")
@@ -200,6 +202,26 @@ def test_buying_from_esr_moves_the_volume_to_esr(cs):
     added = out["detail"]["ESR Rebar"]["s1.billets_t"] - base["detail"]["ESR Rebar"]["s1.billets_t"]
     assert added == pytest.approx(out["detail"]["ERM Rolling"]["t.produced"])
     assert ce.failed_errors(out) == []
+
+
+def test_blend_limits_warn_and_do_not_block(cs):
+    cs["flat"]["EFS"]["blend_pct"].update({"dri": 60.0, "local_scrap": 34.0})       # DRI below 70%, scrap above 25%
+    out = run(cs)
+    c = next(c for c in out["integrity"] if c["check"] == "blend_within_limits")
+    assert not c["passed"] and c["severity"] == "warning" and ce.failed_errors(out) == []
+    assert "EFS flat dri 60.0% outside 70–95%" in c["detail"] and "EFS flat local scrap 34.0%" in c["detail"]
+    cs["flat"]["EFS"]["blend_pct"].update({"dri": 80.0, "local_scrap": 14.0})
+    cs["blend_limits"]["local_scrap_supply_kt"] = 40.0
+    c = next(c for c in run(cs)["integrity"] if c["check"] == "blend_within_limits")
+    assert "local scrap 54.8 kt/month above the 40.0 kt" in c["detail"]
+
+
+def test_blend_limits_are_validated(cs):
+    import state_schema
+    cs["blend_limits"]["furnaces"]["ESR long"]["dri"]["min_pct"] = 40.0          # above its 30% max
+    with pytest.raises(state_schema.ModelError) as e:
+        state_schema.validate(cs)
+    assert e.value.field == "blend_limits.furnaces.ESR long.dri.min_pct"
 
 
 @pytest.mark.parametrize("supplier", ["EZDK", "EFS", "ESR"])

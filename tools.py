@@ -145,7 +145,9 @@ TOOL_SPECS = {s["name"]: s for s in [
            "run_constraints": {"type": "object", "description":
                                "capacity_ceilings {dri: {CO: t}, finished: {CO: {product: t}}}, policy_floors "
                                "{local_share_min: {product: 0..1}}, local_market_ceilings {Rebar, Wire Rod, HRC: "
-                               "kt — HRC required}, additional_constraints [{variable, min, max}]"},
+                               "kt — HRC required}, blend_limits {furnaces: {<furnace>: {<material>: {min_pct, "
+                               "max_pct}}}, local_scrap_supply_kt} (overrides the state's standing limits), "
+                               "additional_constraints [{variable, min, max}]"},
            "state_id": _STATE_ID},
           required=["objective"]),
     _spec("manage_baseline_refresh", "Monthly baseline refresh: generate the seven-sheet XLSX template, "
