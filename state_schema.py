@@ -43,6 +43,7 @@ ERROR_CODES = (
     "integrity_check_failed", "capacity_exceeded", "infeasible_optimization",
     "baseline_not_found", "scenario_not_found", "state_not_found", "baseline_exists",
     "permission_denied", "schema_validation_error", "nothing_to_undo", "tool_unavailable",
+    "internal_error",       # a bug, caught: reported in the standard format instead of crashing
 )
 
 
@@ -240,6 +241,8 @@ def _range_problem(path: str, v: float):
         return None if -1 <= v <= 0 else "a byproduct share between -1 and 0"
     if v < 0:
         return "a value ≥ 0"
+    if v > 1e12:                       # no input of this model is anywhere near this
+        return "a realistic value (≤ 1e12)"
     if key.endswith("_yield_pct") or path.startswith("finishing_yield_pct."):
         return None if 0 < v <= 100 else "a yield in % (0–100]"
     if ".blend_pct." in path or ".distribution_pct." in path:

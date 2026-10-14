@@ -92,6 +92,16 @@ class _Row:
 # Run set-up: constraints and free variables
 # --------------------------------------------------------------------------- #
 
+def _number(v, field, allow_none=False):
+    """A run-constraint value: a finite number ≥ 0 (or None where 'no limit' is allowed)."""
+    if v is None and allow_none:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+        raise ModelError("schema_validation_error", f"{field} must be a number ≥ 0, got {v!r}", field=field,
+                         expected="a number ≥ 0")
+    return float(v)
+
+
 def _run_settings(state, run_constraints):
     rc = dict(run_constraints or {})
     keys = ["capacity_ceilings", "policy_floors", "local_market_ceilings", "blend_limits", "additional_constraints"]
@@ -104,25 +114,26 @@ def _run_settings(state, run_constraints):
     for co, v in (over.get("dri") or {}).items():
         if co not in caps["dri"]:
             raise schema.missing_path_error(f"capacity_ceilings.dri.{co}")
-        caps["dri"][co] = float(v)
+        caps["dri"][co] = _number(v, f"capacity_ceilings.dri.{co}")
     for co, prods in (over.get("finished") or {}).items():
         for prod, v in prods.items():
             if prod not in caps["finished"].get(co, {}):
                 raise schema.missing_path_error(f"capacity_ceilings.finished.{co}.{prod}")
-            caps["finished"][co][prod] = float(v)
+            caps["finished"][co][prod] = _number(v, f"capacity_ceilings.finished.{co}.{prod}")
     floors = dict(state["policy_floors"]["local_share_min"])
     for prod, v in ((rc.get("policy_floors") or {}).get("local_share_min") or {}).items():
         if prod not in floors:
             raise ModelError("invalid_path", f"no policy floor for {prod!r}", field=prod, expected=sorted(floors))
-        if not 0 <= float(v) <= 1:
+        v = _number(v, f"policy_floors.local_share_min.{prod}")
+        if v > 1:
             raise ModelError("schema_validation_error", f"policy floor for {prod} must be within 0..1",
                              field=f"policy_floors.local_share_min.{prod}")
-        floors[prod] = float(v)
+        floors[prod] = v
     markets = {p: state["total_local_market_kt"].get(p) for p in ("Rebar", "Wire Rod", "HRC")}
     for prod, v in (rc.get("local_market_ceilings") or {}).items():
         if prod not in markets:
             raise ModelError("invalid_path", f"no local market for {prod!r}", field=prod, expected=sorted(markets))
-        markets[prod] = None if v is None else float(v)
+        markets[prod] = _number(v, f"local_market_ceilings.{prod}", allow_none=True)
     if (rc.get("local_market_ceilings") or {}).get("HRC") is None:
         return None                                    # HRC must be given fresh every run
     blend = _blend_limits(state, rc.get("blend_limits"))
@@ -150,10 +161,10 @@ def _blend_limits(state, override):
                 raise ModelError("invalid_path", f"blend limit {f}.{k} must be {{min_pct, max_pct}} for "
                                  f"one of {list(MATERIALS)}", field=f"{f}.{k}")
             cur = lim["furnaces"].setdefault(f, {}).setdefault(k, {"min_pct": 0.0, "max_pct": 100.0})
-            cur.update({x: float(v) for x, v in b.items()})
+            cur.update({x: _number(v, f"blend_limits.furnaces.{f}.{k}.{x}") for x, v in b.items()})
     if "local_scrap_supply_kt" in over:
         v = over["local_scrap_supply_kt"]
-        lim["local_scrap_supply_kt"] = None if v is None else float(v)
+        lim["local_scrap_supply_kt"] = _number(v, "blend_limits.local_scrap_supply_kt", allow_none=True)
     for f, mats in lim["furnaces"].items():
         for k, b in mats.items():
             if not 0 <= b["min_pct"] <= b["max_pct"] <= 100:
@@ -441,7 +452,11 @@ class _Model:
         for side in ("min", "max"):
             if ac.get(side) is None:
                 continue
-            v = float(ac[side])
+            v = ac[side]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ModelError("schema_validation_error", f"additional_constraints[{i}].{side} must be a number",
+                                 field=f"additional_constraints[{i}].{side}")
+            v = float(v)
             op_sign = -1 if side == "min" else 1                  # min: −expr ≤ −v
             label = f"{var} {'≥' if side == 'min' else '≤'} {v:g}"
             group = f"additional: {label}"

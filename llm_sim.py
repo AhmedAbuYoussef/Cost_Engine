@@ -100,9 +100,11 @@ def _plan(question: str):
         if m:
             args["run_constraints"] = {"local_market_ceilings": {"HRC": float(m.group(1))}}
         return "find_optimal_mix", args
-    m = re.search(r"\bset\s+([\w .]+?)\s+to\s+(-?[\d.]+)", question, re.I)
+    m = re.search(r"\bset\s+([\w .]+?)\s+to\s+(-?[\d.]+\b|[A-Za-z][\w:.]*)", question, re.I)
     if m:
-        return "update_input", {"path": m.group(1).strip(), "value": float(m.group(2))}
+        v = m.group(2)
+        return "update_input", {"path": m.group(1).strip(),
+                                "value": float(v) if re.fullmatch(r"-?[\d.]+", v) else v}
     m = re.search(r"save (?:this |it )?as (?:a )?scenario(?:\s+(?:named|called))?(?:\s+['\"]?([^'\"]+)['\"]?)?",
                   question, re.I)
     if m:

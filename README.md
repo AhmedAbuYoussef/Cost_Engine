@@ -364,6 +364,46 @@ store.update_inputs(r["changes"])        # only if the user chooses to apply it
   the dummy baseline they take the optimum from 65.62 down to 51.97 M$/month. The data has no
   export demand ceilings, so give those through `additional_constraints`.
 
+## Changing an assumption: just ask
+
+Every judgement call in MODEL_FIXES.md and BLEND_LIMITS.md is an ordinary input, so changing one in
+the chat is enough, e.g. "set EZDK flat local scrap price to 300", "lower EZDK long's DRI minimum to
+60%", "buy ERM's billets from the market".
+
+The change lands in the working session and the model recomputes. Undo takes it back. The next
+optimizer run uses it, and a change that makes no sense (a minimum above its maximum) is refused
+with the reason. `tests/test_assumptions_live.py` checks this through the chat loop for every item
+on the list:
+- ESR tariff;
+- ERM scrap value;
+- export expense;
+- DRI and wire rod capacity;
+- both EZDK scrap prices;
+- blend limits and scrap supply;
+- policy floor;
+- ERM sourcing (incl. partial).
+
+Two items are not inputs:
+- **DRI-dependent EAF power** is not modelled; it needs a model change (BLEND_LIMITS.md).
+- **Export demand ceilings** go into an optimizer run as `additional_constraints`.
+
+## Step 9 — integrity and hardening
+
+- **No output from an unsound state.** Every tool that computes refuses a state failing an
+  error-level check, even one damaged behind the store's back. `compare_states` now does too, unless
+  only inputs are compared. `read_state` still shows the inputs (that is how a problem gets found)
+  but says the state fails.
+- **One error format.** Every refusal has `status`, a listed `error_code` and a message.
+  - 60 fuzzed calls per tool, with nulls, NaN, ±inf, 1e308, wrong types, unknown arguments, Arabic
+    text and path tricks: no crash, no malformed error.
+  - A bug inside a tool comes back as `internal_error` ("no result, nothing stored") and the
+    conversation carries on.
+- **Edge values.**
+  - Refused: NaN, infinity, negatives and absurd magnitudes (> 1e12).
+  - Optimizer run constraints are validated field by field.
+  - A null optional argument takes its default.
+  - A month with no sales runs every report and the optimizer, with break-even 0.
+
 ## Tests
 
 ```
@@ -378,4 +418,5 @@ sourcing decision in state, integrity checks, `compute_all`. The corrected model
 does what the rulebook describes and the workbook lacked: the ERM DRI P&L, the consolidated
 P&L with explicit eliminations (§8.4–8.6), the supplier capacity cascade for ERM billets
 (§4.7), a fully dynamic trade-off matrix (§4.6), and break-even 0 at zero sales (§12.7).
-Next step per the brief: Step 9, polish.
+All nine build steps of the brief are done. What remains is yours to decide, listed in
+MODEL_FIXES.md ("Please confirm") and BLEND_LIMITS.md ("Open questions").

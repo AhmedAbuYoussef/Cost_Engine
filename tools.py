@@ -187,6 +187,8 @@ def validate_args(name: str, args: dict) -> dict:
         if k not in args or args[k] is None:
             if "default" in p:
                 args[k] = p["default"]
+            else:
+                args.pop(k, None)              # null = not given: the tool's own default applies
             continue
         t = p.get("type")
         v = args[k]
@@ -311,6 +313,9 @@ class ToolBox:
             return getattr(self, name)(**validate_args(name, args))
         except ModelError as e:
             return e.to_dict()
+        except Exception as e:                  # never crash the conversation, never return a number
+            return ModelError("internal_error", f"{name} failed unexpectedly ({type(e).__name__}: {e}); "
+                              "no result was produced and nothing was stored.").to_dict()
 
     def visible_tools(self) -> list:
         """Tools the assistant may see now (D.3: the optimizer stays hidden until it ships;
@@ -357,6 +362,11 @@ class ToolBox:
         elif path is not None:
             raise ModelError("schema_validation_error", "give either path/value or changes, not both",
                              field="changes")
+        if not changes or not all(isinstance(c, dict) and isinstance(c.get("path"), str) and "value" in c
+                                  for c in changes):
+            raise ModelError("schema_validation_error",
+                             'changes is a non-empty list of {"path": <dotted path>, "value": <new value>}',
+                             field="changes")
         before = self.store.get_state("working")
         res = self.store.update_inputs(changes, actor=self.mode, note=note)
         if res["changes"]:
@@ -383,8 +393,15 @@ class ToolBox:
         return res
 
     def read_state(self, path="*", state_id="working"):
-        return {"status": "ok", "state_id": state_id, "path": path,
-                "value": self.store.read(path, state_id), "source": self._source(state_id)}
+        """Stored inputs, not results — so it answers even for a state that fails a check (that is
+        how the problem gets found and fixed), and says so."""
+        res = {"status": "ok", "state_id": state_id, "path": path,
+               "value": self.store.read(path, state_id), "source": self._source(state_id)}
+        failed = ce.failed_errors(ce.compute_all(self.store.get_state(state_id)))
+        if failed:
+            res["integrity_warning"] = ("this state fails " + "; ".join(f"{c['check']}: {c['detail']}" for c in failed)
+                                        + " — no report or analysis will run on it until that is fixed")
+        return res
 
     def list_states(self, type="all", filter_by=None):
         return {"status": "ok", "states": self.store.list_states(type, filter_by)}
@@ -943,6 +960,9 @@ class ToolBox:
 
     def compare_states(self, state_a_id, state_b_id, comparison_type="both", output_focus=None,
                        threshold_pct=0):
+        if comparison_type != "inputs":           # results are compared: both states must pass the checks
+            self._load(state_a_id)
+            self._load(state_b_id)
         d = self.store.diff(state_a_id, state_b_id, threshold_pct=threshold_pct,
                             include_outputs=comparison_type != "inputs")
         res = {"status": "ok", "a": {"id": state_a_id, "source": self._source(state_a_id)},
